@@ -3,9 +3,6 @@
 # https://docs.pytorch.org/docs/stable/generated/torch.nn.modules.transformer.Transformer.html
 
 import torch
-# install torch
-# pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu126
-# py -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 from torch import nn
 
 class CrossSeqTransformer(nn.Module):
