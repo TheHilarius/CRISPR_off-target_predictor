@@ -14,19 +14,19 @@ train_data =torch.load("data/train_embeddings.pt")
 val_data = torch.load("data/val_embeddings.pt")
 test_data = torch.load("data/test_embeddings.pt")
 
-# print(f"Train data keys: {train_data.keys()}")
-# print(f"Validation data keys: {val_data.keys()}")   
-# print(f"Test data keys: {test_data.keys()}")
+print(f"Train data keys: {train_data.keys()}")
+print(f"Validation data keys: {val_data.keys()}")   
+print(f"Test data keys: {test_data.keys()}")
 
-# print(f"\nTrain input_ids shape: {train_data['input_ids'].shape}")
-# print(f"Train delta shape: {train_data['delta'].shape}")
-# print(f"Train labels shape: {train_data['labels'].shape}")
+# print(f"\nTrain sequence_embs shape: {train_data['sequence_embs'].shape}")
+# print(f"Train deltaGH shape: {train_data['deltaGH'].shape}")
+# print(f"Train activity shape: {train_data['activity'].shape}")
 
-# print(f"\nVal input_ids shape: {val_data['input_ids'].shape}")
-# print(f"Val labels shape: {val_data['labels'].shape}")
+# print(f"\nVal sequence_embs shape: {val_data['sequence_embs'].shape}")
+# print(f"Val activity shape: {val_data['activity'].shape}")
 
-# print(f"\nTest input_ids shape: {test_data['input_ids'].shape}")
-# print(f"Test labels shape: {test_data['labels'].shape}")
+# print(f"\nTest sequence_embs shape: {test_data['sequence_embs'].shape}")
+# print(f"Test activity shape: {test_data['activity'].shape}")
 
 class CrossSeqTransformer(nn.Module):
     def __init__(self, vocab_size=6, d_model=128, nhead=8,
@@ -49,11 +49,12 @@ class CrossSeqTransformer(nn.Module):
             batch_first=True
         )
 
-        # delta G embedding
+        # deltaGH G embedding
         self.dg_embed = nn.Linear(1, dg_embedding_dim)
 
         # Output regression head
         combined_dim = d_model + dg_embedding_dim
+        
         self.regressor = nn.Sequential(
             nn.Linear(combined_dim, 256),
             nn.ReLU(),
@@ -63,16 +64,34 @@ class CrossSeqTransformer(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(128, 1),
         )
-
-    def forward(self, input_ids, delta_g):
-        B, L = input_ids.shape
-        device = input_ids.device
+        """
+        self.regressor = nn.Sequential(
+            nn.Linear(combined_dim, 512),
+            nn.BatchNorm1d(512),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(512, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(64, 1),
+        )
+        """
+    def forward(self, sequence_embs, deltaGH):
+        B, L = sequence_embs.shape
+        device = sequence_embs.device
 
         # Positional encoding
         pos = torch.arange(L, device=device).unsqueeze(0).expand(B,-1) # position indices
 
         # Embed sequences for encoder-decoder architecture
-        seq_embed = self.token_embed(input_ids) + self.pos_embed(pos)
+        seq_embed = self.token_embed(sequence_embs) + self.pos_embed(pos)
         on_target = seq_embed[:, :23, :]
         off_target = seq_embed[:, 24:, :]
 
@@ -83,7 +102,7 @@ class CrossSeqTransformer(nn.Module):
         pooled = out.mean(dim=1)
         
         # delta G embedding
-        dg_emb = self.dg_embed(delta_g)
+        dg_emb = self.dg_embed(deltaGH)
 
         # Concatenate all features
         combined = torch.cat([pooled, dg_emb], dim=1)
@@ -93,8 +112,12 @@ class CrossSeqTransformer(nn.Module):
 
         return activity_pred.squeeze(-1)
 
+
+
+
 ## -------- Training Loop --------- ##
 
+# for dropout in dropout (add different dropout values to CrossSeqTransformer)
 model = CrossSeqTransformer()
 criterion = nn.MSELoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
@@ -102,50 +125,50 @@ optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 ## NOTE: 10 epochs and batches for now
 num_epochs = 10
 epoch_loss = 0
-train_ids = train_data['input_ids']
-train_delta = train_data['delta'].unsqueeze(-1) if train_data['delta'].dim() == 1 else train_data['delta']
-train_labels = train_data['labels'].unsqueeze(-1) if train_data['labels'].dim() == 1 else train_data['labels']
+train_ids = train_data['sequence_embs']
+train_delta = train_data['deltaGH'].unsqueeze(-1) if train_data['deltaGH'].dim() == 1 else train_data['deltaGH']
+train_activity = train_data['activity'].unsqueeze(-1) if train_data['activity'].dim() == 1 else train_data['activity']
 
-train_dataset = TensorDataset(train_ids, train_delta, train_labels)
+train_dataset = TensorDataset(train_ids, train_delta, train_activity)
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model = model.to(device)
 
-train_delta_min = train_data['delta'].min()
-train_delta_max = train_data['delta'].max()
-train_delta_norm = (train_delta - train_delta_min) / (train_delta_max - train_delta_min)
+train_deltaGH_min = train_data['deltaGH'].min()
+train_deltaGH_max = train_data['deltaGH'].max()
+train_deltaGH_norm = (train_delta - train_deltaGH_min) / (train_deltaGH_max - train_deltaGH_min)
 
-val_ids = val_data['input_ids']
-val_delta = val_data['delta'].unsqueeze(-1) if val_data['delta'].dim() == 1 else val_data['delta']
-val_delta_norm = (val_delta - train_delta_min) / (train_delta_max - train_delta_min)
-val_labels = val_data['labels'].unsqueeze(-1) if val_data['labels'].dim() == 1 else val_data['labels']
+val_ids = val_data['sequence_embs']
+val_deltaGH = val_data['deltaGH'].unsqueeze(-1) if val_data['deltaGH'].dim() == 1 else val_data['deltaGH']
+val_deltaGH_norm = (val_deltaGH - train_deltaGH_min) / (train_deltaGH_max - train_deltaGH_min)
+val_activity = val_data['activity'].unsqueeze(-1) if val_data['activity'].dim() == 1 else val_data['activity']
 
-val_dataset = TensorDataset(val_ids, val_delta_norm, val_labels)
+val_dataset = TensorDataset(val_ids, val_deltaGH_norm, val_activity)
 val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
 
-test_ids = test_data['input_ids']
-test_delta = test_data['delta'].unsqueeze(-1) if test_data['delta'].dim() == 1 else test_data['delta']
-test_delta_norm = (test_delta - train_delta_min) / (train_delta_max - train_delta_min)
-test_labels = test_data['labels'].unsqueeze(-1) if test_data['labels'].dim() == 1 else test_data['labels']
+test_ids = test_data['sequence_embs']
+test_deltaGH = test_data['deltaGH'].unsqueeze(-1) if test_data['deltaGH'].dim() == 1 else test_data['deltaGH']
+test_deltaGH_norm = (test_deltaGH - train_deltaGH_min) / (train_deltaGH_max - train_deltaGH_min)
+test_activity = test_data['activity'].unsqueeze(-1) if test_data['activity'].dim() == 1 else test_data['activity']
 
-test_dataset = TensorDataset(test_ids, test_delta_norm, test_labels)
+test_dataset = TensorDataset(test_ids, test_deltaGH_norm, test_activity)
 test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
-train_dataset = TensorDataset(train_ids, train_delta_norm, train_labels)
+train_dataset = TensorDataset(train_ids, train_deltaGH_norm, train_activity)
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 
 for epoch in range(num_epochs):
     epoch_loss = 0.0
     num_batches = 0
     
-    for input_ids, delta_g, labels in train_loader:
-        input_ids = input_ids.to(device)
-        delta_g = delta_g.to(device)
-        labels = labels.to(device)
+    for sequence_embs, deltaGH, activity in train_loader:
+        sequence_embs = sequence_embs.to(device)
+        deltaGH = deltaGH.to(device)
+        activity = activity.to(device)
         
-        predictions = model(input_ids, delta_g)
-        loss = criterion(predictions, labels.squeeze(-1))
+        predictions = model(sequence_embs, deltaGH)
+        loss = criterion(predictions, activity.squeeze(-1))
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -164,19 +187,19 @@ predictions_all = []
 actuals_all = []
 
 with torch.no_grad():
-    for input_ids, delta_g, labels in test_loader:
-        input_ids = input_ids.to(device)
-        delta_g = delta_g.to(device)
-        labels = labels.to(device)
+    for sequence_embs, deltaGH, activity in test_loader:
+        sequence_embs = sequence_embs.to(device)
+        deltaGH = deltaGH.to(device)
+        activity = activity.to(device)
         
-        predictions = model(input_ids, delta_g)
-        loss = criterion(predictions, labels.squeeze(-1))
+        predictions = model(sequence_embs, deltaGH)
+        loss = criterion(predictions, activity.squeeze(-1))
         
         test_loss += loss.item()
         num_test_batches += 1
         
         predictions_all.append(predictions.cpu().numpy())
-        actuals_all.append(labels.cpu().numpy())
+        actuals_all.append(activity.cpu().numpy())
 
 predictions_all = np.concatenate(predictions_all)
 actuals_all = np.concatenate(actuals_all)
