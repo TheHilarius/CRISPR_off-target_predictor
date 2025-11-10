@@ -8,9 +8,6 @@ import torch
 # py -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 from torch import nn
 
-
-### SCORE = CHANGEseq_reads = Activty
-
 class CrossSeqTransformer(nn.Module):
     def __init__(self, vocab_size=5, d_model=128, nhead=8,
                  num_encoder_layers=3, num_decoder_layers=3,
