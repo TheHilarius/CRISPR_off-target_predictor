@@ -14,19 +14,19 @@ train_data =torch.load("data/train_embeddings.pt")
 val_data = torch.load("data/val_embeddings.pt")
 test_data = torch.load("data/test_embeddings.pt")
 
-print(f"Train data keys: {train_data.keys()}")
-print(f"Validation data keys: {val_data.keys()}")   
-print(f"Test data keys: {test_data.keys()}")
+# print(f"Train data keys: {train_data.keys()}")
+# print(f"Validation data keys: {val_data.keys()}")   
+# print(f"Test data keys: {test_data.keys()}")
 
-print(f"\nTrain input_ids shape: {train_data['input_ids'].shape}")
-print(f"Train delta shape: {train_data['delta'].shape}")
-print(f"Train labels shape: {train_data['labels'].shape}")
+# print(f"\nTrain input_ids shape: {train_data['input_ids'].shape}")
+# print(f"Train delta shape: {train_data['delta'].shape}")
+# print(f"Train labels shape: {train_data['labels'].shape}")
 
-print(f"\nVal input_ids shape: {val_data['input_ids'].shape}")
-print(f"Val labels shape: {val_data['labels'].shape}")
+# print(f"\nVal input_ids shape: {val_data['input_ids'].shape}")
+# print(f"Val labels shape: {val_data['labels'].shape}")
 
-print(f"\nTest input_ids shape: {test_data['input_ids'].shape}")
-print(f"Test labels shape: {test_data['labels'].shape}")
+# print(f"\nTest input_ids shape: {test_data['input_ids'].shape}")
+# print(f"Test labels shape: {test_data['labels'].shape}")
 
 class CrossSeqTransformer(nn.Module):
     def __init__(self, vocab_size=6, d_model=128, nhead=8,
@@ -62,7 +62,6 @@ class CrossSeqTransformer(nn.Module):
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(128, 1),
-            nn.Sigmoid() # activity between 0 and 1
         )
 
     def forward(self, input_ids, delta_g):
@@ -110,14 +109,41 @@ train_labels = train_data['labels'].unsqueeze(-1) if train_data['labels'].dim() 
 train_dataset = TensorDataset(train_ids, train_delta, train_labels)
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 
-# print(f"Min input_id: {train_data['input_ids'].min()}")
-# print(f"Max input_id: {train_data['input_ids'].max()}")
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model = model.to(device)
+
+train_delta_min = train_data['delta'].min()
+train_delta_max = train_data['delta'].max()
+train_delta_norm = (train_delta - train_delta_min) / (train_delta_max - train_delta_min)
+
+val_ids = val_data['input_ids']
+val_delta = val_data['delta'].unsqueeze(-1) if val_data['delta'].dim() == 1 else val_data['delta']
+val_delta_norm = (val_delta - train_delta_min) / (train_delta_max - train_delta_min)
+val_labels = val_data['labels'].unsqueeze(-1) if val_data['labels'].dim() == 1 else val_data['labels']
+
+val_dataset = TensorDataset(val_ids, val_delta_norm, val_labels)
+val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
+
+test_ids = test_data['input_ids']
+test_delta = test_data['delta'].unsqueeze(-1) if test_data['delta'].dim() == 1 else test_data['delta']
+test_delta_norm = (test_delta - train_delta_min) / (train_delta_max - train_delta_min)
+test_labels = test_data['labels'].unsqueeze(-1) if test_data['labels'].dim() == 1 else test_data['labels']
+
+test_dataset = TensorDataset(test_ids, test_delta_norm, test_labels)
+test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+
+train_dataset = TensorDataset(train_ids, train_delta_norm, train_labels)
+train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 
 for epoch in range(num_epochs):
     epoch_loss = 0.0
     num_batches = 0
     
     for input_ids, delta_g, labels in train_loader:
+        input_ids = input_ids.to(device)
+        delta_g = delta_g.to(device)
+        labels = labels.to(device)
+        
         predictions = model(input_ids, delta_g)
         loss = criterion(predictions, labels.squeeze(-1))
         optimizer.zero_grad()
@@ -130,3 +156,32 @@ for epoch in range(num_epochs):
     print(f"Epoch {epoch+1}: avg loss = {epoch_loss / num_batches:.4f}")
 
 print("Training complete")
+
+model.eval()
+test_loss = 0.0
+num_test_batches = 0
+predictions_all = []
+actuals_all = []
+
+with torch.no_grad():
+    for input_ids, delta_g, labels in test_loader:
+        input_ids = input_ids.to(device)
+        delta_g = delta_g.to(device)
+        labels = labels.to(device)
+        
+        predictions = model(input_ids, delta_g)
+        loss = criterion(predictions, labels.squeeze(-1))
+        
+        test_loss += loss.item()
+        num_test_batches += 1
+        
+        predictions_all.append(predictions.cpu().numpy())
+        actuals_all.append(labels.cpu().numpy())
+
+predictions_all = np.concatenate(predictions_all)
+actuals_all = np.concatenate(actuals_all)
+
+print(f"\nTest Loss: {test_loss / num_test_batches:.4f}\n")
+print("Sample Predictions vs Actual:")
+for i in range(min(20, len(predictions_all))):
+    print(f"  Predicted: {predictions_all[i][0]:.2f}, Actual: {actuals_all[i][0]:.2f}")
