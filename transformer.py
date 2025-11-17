@@ -9,10 +9,15 @@ import torch.optim as optim
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
+from scipy.stats import spearmanr
+import random
+import os
 
 train_data =torch.load("data/train_embeddings.pt")
 val_data = torch.load("data/val_embeddings.pt")
 test_data = torch.load("data/test_embeddings.pt")
+
 
 # print(f"Train data keys: {train_data.keys()}")
 # print(f"Validation data keys: {val_data.keys()}")   
@@ -161,15 +166,40 @@ class CrossSeqTransformer(nn.Module):
 
         return activity_pred.squeeze(-1)
 
+def adjust_lr(optimizer, epoch):
+    if epoch < 3:          # epochs 1,2,3 → 1e-3
+        lr = 1e-3
+    elif epoch < 10:        # epochs 4-10 → 1e-4
+        lr = 1e-4
+    else:                  # epochs  → 1e-5
+        lr = 1e-5
+    
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+    return lr
 
 
+def set_seed(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    # Ensures deterministic behavior
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+    # Optional: makes dataloader workers deterministic
+    os.environ['PYTHONHASHSEED'] = str(seed)
 
 ## -------- Training Loop --------- ##
 
 # for dropout in dropout (add different dropout values to CrossSeqTransformer)
+set_seed(42)
 model = CrossSeqTransformer()
 criterion = nn.MSELoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
 ## NOTE: 10 epochs and batches for now
 num_epochs = 10
@@ -212,9 +242,20 @@ test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 train_dataset = TensorDataset(train_seq_embs, train_deltaGH_norm, train_activity)
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 
+all_preds = []
+all_targets = []
+
 for epoch in range(num_epochs):
+    
+    current_lr = adjust_lr(optimizer, epoch)
+    
     epoch_loss = 0
     num_batches = 0
+    
+    # containers for THIS epoch only
+    epoch_preds = []
+    epoch_targets = []
+    epoch_spearman = []
     
     for sequence_embs, deltaGH, activity in train_loader:
         sequence_embs = sequence_embs.to(device)
@@ -223,14 +264,27 @@ for epoch in range(num_epochs):
         
         predictions = model(sequence_embs, deltaGH)
         loss = criterion(predictions, activity.squeeze(-1))
-        # print(f"Activity real: {activity.squeeze(-1)}, predicted: {predictions}")
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         
         epoch_loss += loss.item()
         num_batches += 1
-    
-    print(f"Epoch {epoch+1}: avg loss = {epoch_loss / num_batches:.4f}")
+        
+        # ---- save predictions for this epoch ----
+        epoch_preds.append(predictions.detach().cpu())
+        epoch_targets.append(activity.detach().cpu())
+
+    # ---- combine epoch-level tensors ----
+    epoch_preds = torch.cat(epoch_preds).squeeze().numpy()
+    epoch_targets = torch.cat(epoch_targets).squeeze().numpy()
+
+    # ---- compute Spearman correlation ----
+    rho, p_value = spearmanr(epoch_targets, epoch_preds)
+    epoch_spearman.append(rho)
+
+    print(f"Epoch {epoch+1}: "
+          f"loss={epoch_loss/num_batches:.4f}, "
+          f"Spearman rho={rho:.4f}")
 
 print("Training complete")
