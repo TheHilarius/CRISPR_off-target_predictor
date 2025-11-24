@@ -210,7 +210,7 @@ num_epochs = 10
 train_seq_embs = train_data['sequence_embs']
 train_delta = train_data['deltaGH'].unsqueeze(-1) if train_data['deltaGH'].dim() == 1 else train_data['deltaGH']
 train_activity = train_data['activity'].unsqueeze(-1) if train_data['activity'].dim() == 1 else train_data['activity']
-train_activity = np.log10(train_activity)
+train_activity = torch.log10(train_activity)
 
 train_dataset = TensorDataset(train_seq_embs, train_delta, train_activity)
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
@@ -227,7 +227,7 @@ val_seq_embs = val_data['sequence_embs']
 val_deltaGH = val_data['deltaGH'].unsqueeze(-1) if val_data['deltaGH'].dim() == 1 else val_data['deltaGH']
 val_deltaGH_norm = (val_deltaGH - train_deltaGH_min) / (train_deltaGH_max - train_deltaGH_min) # Normalizing
 val_activity = val_data['activity'].unsqueeze(-1) if val_data['activity'].dim() == 1 else val_data['activity']
-val_activity = np.log10(val_activity)
+val_activity = torch.log10(val_activity)
 
 
 val_dataset = TensorDataset(val_seq_embs, val_deltaGH_norm, val_activity)
@@ -237,7 +237,7 @@ test_seq_embs = test_data['sequence_embs']
 test_deltaGH = test_data['deltaGH'].unsqueeze(-1) if test_data['deltaGH'].dim() == 1 else test_data['deltaGH']
 test_deltaGH_norm = (test_deltaGH - train_deltaGH_min) / (train_deltaGH_max - train_deltaGH_min) # Normalizing
 test_activity = test_data['activity'].unsqueeze(-1) if test_data['activity'].dim() == 1 else test_data['activity']
-test_activity = np.log10(test_activity)
+test_activity = torch.log10(test_activity)
 
 test_dataset = TensorDataset(test_seq_embs, test_deltaGH_norm, test_activity)
 test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
