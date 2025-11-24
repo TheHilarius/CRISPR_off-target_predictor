@@ -195,6 +195,19 @@ def set_seed(seed=42):
     # Optional: makes dataloader workers deterministic
     os.environ['PYTHONHASHSEED'] = str(seed)
 
+def adjust_lr(optimizer, epoch):
+    if epoch < 3:          # epochs 1,2,3 → 1e-3
+        lr = 1e-3
+    elif epoch < 10:        # epochs 4-10 → 1e-4
+        lr = 1e-4
+    else:                  # epochs  → 1e-5
+        lr = 1e-5
+    
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+
+    return lr
+
 def cross_val_layers(train_seq_embs, train_deltaGH_norm, train_activity,
                      num_layers=[1,2,3,4], k=5, num_epochs=5, batch_size=32):
 
@@ -228,6 +241,9 @@ def cross_val_layers(train_seq_embs, train_deltaGH_norm, train_activity,
             optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
             for epoch in range(num_epochs):
+
+                lr = adjust_lr(optimizer, epoch)
+
                 model.train()
                 for seq_embs, deltaGH, activity in train_loader:
                     optimizer.zero_grad()
@@ -258,7 +274,7 @@ def cross_val_layers(train_seq_embs, train_deltaGH_norm, train_activity,
 
     return results
 
-## -------- Training Loop --------- ##
+## -------- Training --------- ##
 
 # for dropout in dropout (add different dropout values to CrossSeqTransformer)
 set_seed(42)
@@ -309,9 +325,9 @@ train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 
 # --- Cross-Validation --- #
 
-num_layers_cv = [2, 3, 4, 5, 6]
+num_layers_cv = [2, 3, 4, 5]
 
 cv_results = cross_val_layers(train_seq_embs, train_deltaGH_norm, train_activity,
-                              num_layers = num_layers_cv, k=3, num_epochs=3)
+                              num_layers = num_layers_cv, k=3, num_epochs=10)
 
 print(cv_results)
