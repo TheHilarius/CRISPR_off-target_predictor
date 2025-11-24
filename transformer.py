@@ -13,6 +13,9 @@ import pandas as pd
 from scipy.stats import spearmanr
 import random
 import os
+from sklearn.metrics import roc_curve, roc_auc_score
+
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 train_data =torch.load("data/train_embeddings.pt")
 val_data = torch.load("data/val_embeddings.pt")
@@ -245,6 +248,8 @@ train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 all_preds = []
 all_targets = []
 
+
+
 for epoch in range(num_epochs):
     
     current_lr = adjust_lr(optimizer, epoch)
@@ -278,6 +283,10 @@ for epoch in range(num_epochs):
     # ---- combine epoch-level tensors ----
     epoch_preds = torch.cat(epoch_preds).squeeze().numpy()
     epoch_targets = torch.cat(epoch_targets).squeeze().numpy()
+    
+    threshold = np.median(epoch_targets)
+    y_true = (epoch_targets >= threshold).astype(int)
+    y_score = epoch_preds
 
     # ---- compute Spearman correlation ----
     rho, p_value = spearmanr(epoch_targets, epoch_preds)
@@ -286,5 +295,21 @@ for epoch in range(num_epochs):
     print(f"Epoch {epoch+1}: "
           f"loss={epoch_loss/num_batches:.4f}, "
           f"Spearman rho={rho:.4f}")
+    
+    # ---- Compute ROC curve ----
+    fpr, tpr, thresholds = roc_curve(y_true, y_score)
+
+    # ---- Compute AUC ----
+    auc = roc_auc_score(y_true, y_score)
+
+    print(f"AUC: {auc:.4f}")
+
+    # ---- Plot ----
+    plt.plot(fpr, tpr)
+    plt.plot([0,1],[0,1],'--')
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.title(f"ROC Curve (AUC={auc:.4f})")
+    plt.show()
 
 print("Training complete")
