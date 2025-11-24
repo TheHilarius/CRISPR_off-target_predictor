@@ -352,9 +352,9 @@ def evaluate_model(model, data_loader, device):
     return all_preds, all_targets, rho, auc
 
 # Evaluate on internal test set
-int_preds, int_targets, int_rho, int_auc = evaluate_model(model, int_test_loader, device)
-print(f"Internal Test Set - Spearman rho: {int_rho:.4f}, AUC: {int_auc:.4f}")
+#int_preds, int_targets, int_rho, int_auc = evaluate_model(model, int_test_loader, device)
+#print(f"Internal Test Set - Spearman rho: {int_rho:.4f}, AUC: {int_auc:.4f}")
 
 # Evaluate on external test set
-ext_preds, ext_targets, ext_rho, ext_auc = evaluate_model(model, ext_test_loader, device)
-print(f"External Test Set - Spearman rho: {ext_rho:.4f}, AUC: {ext_auc:.4f}")
+#ext_preds, ext_targets, ext_rho, ext_auc = evaluate_model(model, ext_test_loader, device)
+#print(f"External Test Set - Spearman rho: {ext_rho:.4f}, AUC: {ext_auc:.4f}")
