@@ -21,25 +21,6 @@ train_data =torch.load("data/train_embeddings.pt")
 val_data = torch.load("data/val_embeddings.pt")
 test_data = torch.load("data/test_embeddings.pt")
 
-
-# print(f"Train data keys: {train_data.keys()}")
-# print(f"Validation data keys: {val_data.keys()}")   
-# print(f"Test data keys: {test_data.keys()}")
-
-# print(f"\nTrain sequence_embs shape: {train_data['sequence_embs'].shape}")
-# print(f"Train deltaGH shape: {train_data['deltaGH'].shape}")
-# print(f"Train activity shape: {train_data['activity'].shape}")
-
-# print(f"\nVal sequence_embs shape: {val_data['sequence_embs'].shape}")
-# print(f"Val activity shape: {val_data['activity'].shape}")
-
-# print(f"\nTest sequence_embs shape: {test_data['sequence_embs'].shape}")
-# print(f"Test activity shape: {test_data['activity'].shape}")
-
-# global flag for advanced or simple regressor
-use_advanced_regressor = True
-
-       
 class CrossSeqTransformer(nn.Module):
     def __init__(self, vocab_size=6, d_model=128, nhead=8,          # WHY SHOULD VOCAB SIZE BE 6??
                   num_encoder_layers=3, num_decoder_layers=3,
@@ -61,7 +42,7 @@ class CrossSeqTransformer(nn.Module):
              batch_first=True
          )
          
-  # ---------------------------
+         # ---------------------------
          # Transformer Encoder
          # ---------------------------
          encoder_layer = nn.TransformerEncoderLayer(
@@ -112,33 +93,23 @@ class CrossSeqTransformer(nn.Module):
          # ---------------------------
          combined_dim = d_model + dg_embedding_dim
 
-         if use_advanced_regressor:
-             self.regressor = nn.Sequential(
-                 nn.Linear(combined_dim, 512),
-                 nn.BatchNorm1d(512),
-                 nn.ReLU(),
+         self.regressor = nn.Sequential(
+             nn.Linear(combined_dim, 512),
+             nn.BatchNorm1d(512),
+             nn.ReLU(),
 
-                 nn.Linear(512, 256),
-                 nn.BatchNorm1d(256),
-                 nn.GELU(),
-
-                 nn.Linear(256, 128),
-                 nn.ReLU(),
-
-                 nn.Linear(128, 64),
-                 nn.GELU(),
-
-                 nn.Linear(64, 1),
-             )
-         else:
-             self.regressor = nn.Sequential(
-                 nn.Linear(combined_dim, 256),
-                 nn.ReLU(),
-                 nn.Dropout(dropout),
-                 nn.Linear(256, 128),
-                 nn.ReLU(),
-                 nn.Dropout(dropout),
-                 nn.Linear(128, 1))
+             nn.Linear(512, 256),
+             nn.BatchNorm1d(256),
+             nn.GELU(),
+             
+             nn.Linear(256, 128),
+             nn.ReLU(),
+             
+             nn.Linear(128, 64),
+             nn.GELU(),
+             
+             nn.Linear(64, 1),
+         )
 
     def forward(self, sequence_embs, deltaGH):
         B, L = sequence_embs.shape
@@ -172,7 +143,7 @@ class CrossSeqTransformer(nn.Module):
 def adjust_lr(optimizer, epoch):
     if epoch < 3:          # epochs 1,2,3 → 1e-3
         lr = 1e-3
-    elif epoch < 10:        # epochs 4-10 → 1e-4
+    elif epoch < 10:       # epochs 4-10 → 1e-4
         lr = 1e-4
     else:                  # epochs  → 1e-5
         lr = 1e-5
@@ -213,7 +184,7 @@ train_activity = train_data['activity'].unsqueeze(-1) if train_data['activity'].
 train_activity = torch.log10(train_activity)
 
 train_dataset = TensorDataset(train_seq_embs, train_delta, train_activity)
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model = model.to(device)
@@ -231,7 +202,7 @@ val_activity = torch.log10(val_activity)
 
 
 val_dataset = TensorDataset(val_seq_embs, val_deltaGH_norm, val_activity)
-val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
+val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
 
 test_seq_embs = test_data['sequence_embs']
 test_deltaGH = test_data['deltaGH'].unsqueeze(-1) if test_data['deltaGH'].dim() == 1 else test_data['deltaGH']
@@ -240,15 +211,13 @@ test_activity = test_data['activity'].unsqueeze(-1) if test_data['activity'].dim
 test_activity = torch.log10(test_activity)
 
 test_dataset = TensorDataset(test_seq_embs, test_deltaGH_norm, test_activity)
-test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False)
 
 train_dataset = TensorDataset(train_seq_embs, train_deltaGH_norm, train_activity)
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
 
 all_preds = []
 all_targets = []
-
-
 
 for epoch in range(num_epochs):
     
@@ -310,6 +279,10 @@ for epoch in range(num_epochs):
     plt.xlabel("False Positive Rate")
     plt.ylabel("True Positive Rate")
     plt.title(f"ROC Curve (AUC={auc:.4f})")
-    plt.show()
+    # if epoch is last, show plot
+    if epoch == 0:
+        plt.show()
+    elif epoch == num_epochs - 1:
+        plt.show()
 
 print("Training complete")

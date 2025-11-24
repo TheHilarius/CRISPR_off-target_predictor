@@ -5,6 +5,7 @@
 import torch
 from torch import nn
 from torch.utils.data import TensorDataset, DataLoader
+from sklearn.metrics import roc_curve, roc_auc_score
 import torch.optim as optim
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -17,10 +18,6 @@ import os
 train_data =torch.load("data/train_embeddings.pt")
 val_data = torch.load("data/val_embeddings.pt")
 test_data = torch.load("data/test_embeddings.pt")
-
-# global flag for advanced or simple regressor
-use_advanced_regressor = False
-
        
 class CrossSeqTransformer(nn.Module):
     def __init__(self, vocab_size=6, d_model=128, nhead=8,          # WHY SHOULD VOCAB SIZE BE 6??
@@ -93,33 +90,23 @@ class CrossSeqTransformer(nn.Module):
          # ---------------------------
          combined_dim = d_model + dg_embedding_dim
 
-         if use_advanced_regressor:
-             self.regressor = nn.Sequential(
-                 nn.Linear(combined_dim, 512),
-                 nn.BatchNorm1d(512),
-                 nn.ReLU(),
+         self.regressor = nn.Sequential(
+            nn.Linear(combined_dim, 512),
+            nn.BatchNorm1d(512),
+            nn.ReLU(),
 
-                 nn.Linear(512, 256),
-                 nn.BatchNorm1d(256),
-                 nn.GELU(),
+            nn.Linear(512, 256),
+            nn.BatchNorm1d(256),
+            nn.GELU(),
 
-                 nn.Linear(256, 128),
-                 nn.ReLU(),
+            nn.Linear(256, 128),
+            nn.ReLU(),
 
-                 nn.Linear(128, 64),
-                 nn.GELU(),
+            nn.Linear(128, 64),
+            nn.GELU(),
 
-                 nn.Linear(64, 1),
-             )
-         else:
-             self.regressor = nn.Sequential(
-                 nn.Linear(combined_dim, 256),
-                 nn.ReLU(),
-                 nn.Dropout(dropout),
-                 nn.Linear(256, 128),
-                 nn.ReLU(),
-                 nn.Dropout(dropout),
-                 nn.Linear(128, 1))
+            nn.Linear(64, 1),
+        )
 
     def forward(self, sequence_embs, deltaGH):
         B, L = sequence_embs.shape
@@ -162,7 +149,6 @@ def adjust_lr(optimizer, epoch, base_lr):
         param_group['lr'] = lr
     return lr
 
-
 def set_seed(seed=42):
     random.seed(seed)
     np.random.seed(seed)
@@ -181,10 +167,10 @@ def set_seed(seed=42):
 
 # Define hyperparameter grid
 hyperparameter_grid = {
-    'num_epochs': [10], #100
-    'dropout': [0.1, 0.2, 0.3],
+    'num_epochs': [10, 100], #100
+    'dropout': [0.5, 0.1, 0.2, 0.3],
     'batch_size': [16, 32],
-    'initial_lr': [1e-3, 1e-4]
+    'initial_lr': [1e-3]
 }
 
 # Store results
@@ -246,8 +232,7 @@ for num_epochs in hyperparameter_grid['num_epochs']:
                 test_dataset = TensorDataset(test_seq_embs, test_deltaGH_norm, test_activity)
                 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-## -------- Training Loop --------- ##
-
+                ## -------- Training Loop --------- ##
                 all_preds = []
                 all_targets = []
                 
@@ -289,9 +274,17 @@ for num_epochs in hyperparameter_grid['num_epochs']:
                     rho, p_value = spearmanr(epoch_targets, epoch_preds)
                     epoch_spearman.append(rho)
 
+                    # ========== ADD TRAINING AUC HERE ========== #
+                    threshold = np.median(epoch_targets)
+                    y_true = (epoch_targets >= threshold).astype(int)
+                    y_score = epoch_preds
+                    train_auc = roc_auc_score(y_true, y_score)
+                    # ========================================== #
+
                     print(f"Epoch {epoch+1}/{num_epochs}: "
                           f"loss={epoch_loss/num_batches:.4f}, "
-                          f"Spearman rho={rho:.4f}")
+                          f"Spearman rho={rho:.4f}, "
+                          f"AUC={train_auc:.4f}")  # ← UPDATE THIS LINE
 
                 # Evaluate on validation set
                 model.eval()
@@ -320,7 +313,14 @@ for num_epochs in hyperparameter_grid['num_epochs']:
                 val_spearman, _ = spearmanr(val_targets, val_preds)
                 val_loss_avg = val_loss / val_num_batches
                 
-                print(f"\nValidation Loss: {val_loss_avg:.4f}, Validation Spearman: {val_spearman:.4f}")
+                # ========== ADD VALIDATION AUC HERE ========== #
+                threshold_val = np.median(val_targets)
+                y_true_val = (val_targets >= threshold_val).astype(int)
+                y_score_val = val_preds
+                val_auc = roc_auc_score(y_true_val, y_score_val)
+                # ============================================ #
+                
+                print(f"\nValidation Loss: {val_loss_avg:.4f}, Validation Spearman: {val_spearman:.4f}, Validation AUC: {val_auc:.4f}")  # ← UPDATE THIS LINE
                 
                 # Store results
                 result = {
@@ -330,8 +330,10 @@ for num_epochs in hyperparameter_grid['num_epochs']:
                     'initial_lr': initial_lr,
                     'final_train_loss': epoch_loss/num_batches,
                     'final_train_spearman': rho,
+                    'final_train_auc': train_auc,  # ← ADD THIS LINE
                     'val_loss': val_loss_avg,
-                    'val_spearman': val_spearman
+                    'val_spearman': val_spearman,
+                    'val_auc': val_auc  # ← ADD THIS LINE
                 }
                 results.append(result)
                 
@@ -359,7 +361,7 @@ for key, value in best_config.items():
     print(f"{key}: {value}")
 
 # Save results to CSV
-results_df.to_csv('hyperparameter_results.csv', index=False)
+results_df.to_csv('hyperparameter_results1.csv', index=False)
 print("\nResults saved to 'hyperparameter_results.csv'")
 
 print("Training complete")
