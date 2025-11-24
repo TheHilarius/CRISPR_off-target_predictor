@@ -347,14 +347,36 @@ def evaluate_model(model, data_loader, device):
     threshold = np.median(all_targets)
     y_true = (all_targets >= threshold).astype(int)
     y_score = all_preds
+    fpr, tpr, _ = roc_curve(y_true, y_score)
     auc = roc_auc_score(y_true, y_score)
 
-    return all_preds, all_targets, rho, auc
+    return all_preds, all_targets, rho, auc, fpr, tpr
 
 # Evaluate on internal test set
-#int_preds, int_targets, int_rho, int_auc = evaluate_model(model, int_test_loader, device)
+#int_preds, int_targets, int_rho, int_auc, int_fpr, int_tpr = evaluate_model(model, int_test_loader, device)
 #print(f"Internal Test Set - Spearman rho: {int_rho:.4f}, AUC: {int_auc:.4f}")
 
 # Evaluate on external test set
-#ext_preds, ext_targets, ext_rho, ext_auc = evaluate_model(model, ext_test_loader, device)
+#ext_preds, ext_targets, ext_rho, ext_auc, ext_fpr, ext_tpr = evaluate_model(model, ext_test_loader, device)
 #print(f"External Test Set - Spearman rho: {ext_rho:.4f}, AUC: {ext_auc:.4f}")
+
+# fig, axes = plt.subplots(1, 2, figsize=(12, 5))  # 1 row, 2 columns
+
+# # Internal test ROC
+# axes[0].plot(int_fpr, int_tpr, label=f'Internal Test (AUC={int_auc:.4f})')
+# axes[0].plot([0,1], [0,1], '--', color='gray')
+# axes[0].set_xlabel("False Positive Rate")
+# axes[0].set_ylabel("True Positive Rate")
+# axes[0].set_title("Internal Test ROC")
+# axes[0].legend()
+
+# # External test ROC
+# axes[1].plot(ext_fpr, ext_tpr, label=f'External Test (AUC={ext_auc:.4f})')
+# axes[1].plot([0,1], [0,1], '--', color='gray')
+# axes[1].set_xlabel("False Positive Rate")
+# axes[1].set_ylabel("True Positive Rate")
+# axes[1].set_title("External Test ROC")
+# axes[1].legend()
+
+# plt.tight_layout()
+# plt.show()
