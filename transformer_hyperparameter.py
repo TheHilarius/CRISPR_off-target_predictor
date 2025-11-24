@@ -18,21 +18,6 @@ train_data =torch.load("data/train_embeddings.pt")
 val_data = torch.load("data/val_embeddings.pt")
 test_data = torch.load("data/test_embeddings.pt")
 
-
-# print(f"Train data keys: {train_data.keys()}")
-# print(f"Validation data keys: {val_data.keys()}")   
-# print(f"Test data keys: {test_data.keys()}")
-
-# print(f"\nTrain sequence_embs shape: {train_data['sequence_embs'].shape}")
-# print(f"Train deltaGH shape: {train_data['deltaGH'].shape}")
-# print(f"Train activity shape: {train_data['activity'].shape}")
-
-# print(f"\nVal sequence_embs shape: {val_data['sequence_embs'].shape}")
-# print(f"Val activity shape: {val_data['activity'].shape}")
-
-# print(f"\nTest sequence_embs shape: {test_data['sequence_embs'].shape}")
-# print(f"Test activity shape: {test_data['activity'].shape}")
-
 # global flag for advanced or simple regressor
 use_advanced_regressor = False
 
@@ -196,10 +181,10 @@ def set_seed(seed=42):
 
 # Define hyperparameter grid
 hyperparameter_grid = {
-    'num_epochs': [10,100], #100
-    'dropout': [0.1, 0.2, 0.3, 0.5],
-    'batch_size': [16, 32, 64],
-    'initial_lr': [1e-3, 5e-4, 1e-4]
+    'num_epochs': [10], #100
+    'dropout': [0.1, 0.2, 0.3],
+    'batch_size': [16, 32],
+    'initial_lr': [1e-3, 1e-4]
 }
 
 # Store results
