@@ -19,8 +19,8 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 train_data =torch.load("data/train_embeddings.pt")
 val_data = torch.load("data/val_embeddings.pt")
-test_data = torch.load("data/test_embeddings.pt")
-
+int_test_data = torch.load("data/test_embeddings.pt")
+ext_test_data = torch.load("data/ext_test_embeddings.pt")
 
 # print(f"Train data keys: {train_data.keys()}")
 # print(f"Validation data keys: {val_data.keys()}")   
@@ -223,31 +223,38 @@ train_deltaGH_min = train_data['deltaGH'].min()
 train_deltaGH_max = train_data['deltaGH'].max()
 train_deltaGH_norm = (train_delta - train_deltaGH_min) / (train_deltaGH_max - train_deltaGH_min)   ## MAKE SURE NORMALIZATION IS CORRECT
 
+train_dataset = TensorDataset(train_seq_embs, train_deltaGH_norm, train_activity)
+train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+
 val_seq_embs = val_data['sequence_embs']
 val_deltaGH = val_data['deltaGH'].unsqueeze(-1) if val_data['deltaGH'].dim() == 1 else val_data['deltaGH']
 val_deltaGH_norm = (val_deltaGH - train_deltaGH_min) / (train_deltaGH_max - train_deltaGH_min) # Normalizing
 val_activity = val_data['activity'].unsqueeze(-1) if val_data['activity'].dim() == 1 else val_data['activity']
 val_activity = np.log10(val_activity)
 
-
 val_dataset = TensorDataset(val_seq_embs, val_deltaGH_norm, val_activity)
 val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
 
-test_seq_embs = test_data['sequence_embs']
-test_deltaGH = test_data['deltaGH'].unsqueeze(-1) if test_data['deltaGH'].dim() == 1 else test_data['deltaGH']
-test_deltaGH_norm = (test_deltaGH - train_deltaGH_min) / (train_deltaGH_max - train_deltaGH_min) # Normalizing
-test_activity = test_data['activity'].unsqueeze(-1) if test_data['activity'].dim() == 1 else test_data['activity']
-test_activity = np.log10(test_activity)
+int_test_seq_embs = int_test_data['sequence_embs']
+int_test_deltaGH = int_test_data['deltaGH'].unsqueeze(-1) if int_test_data['deltaGH'].dim() == 1 else int_test_data['deltaGH']
+int_test_deltaGH_norm = (int_test_deltaGH - train_deltaGH_min) / (train_deltaGH_max - train_deltaGH_min) # Normalizing
+int_test_activity = int_test_data['activity'].unsqueeze(-1) if int_test_data['activity'].dim() == 1 else int_test_data['activity']
+int_test_activity = np.log10(int_test_activity)
 
-test_dataset = TensorDataset(test_seq_embs, test_deltaGH_norm, test_activity)
-test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+int_test_dataset = TensorDataset(int_test_seq_embs, int_test_deltaGH_norm, int_test_activity)
+int_test_loader = DataLoader(int_test_dataset, batch_size=32, shuffle=False)
 
-train_dataset = TensorDataset(train_seq_embs, train_deltaGH_norm, train_activity)
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+ext_test_seq_embs = ext_test_data['sequence_embs']
+ext_test_deltaGH = ext_test_data['deltaGH'].unsqueeze(-1) if ext_test_data['deltaGH'].dim() == 1 else ext_test_data['deltaGH']
+ext_test_deltaGH_norm = (ext_test_deltaGH - train_deltaGH_min) / (train_deltaGH_max - train_deltaGH_min) # Normalizing
+ext_test_activity = ext_test_data['activity'].unsqueeze(-1) if ext_test_data['activity'].dim() == 1 else ext_test_data['activity']
+ext_test_activity = np.log10(ext_test_activity)
+
+ext_test_dataset = TensorDataset(ext_test_seq_embs, ext_test_deltaGH_norm, ext_test_activity)
+ext_test_loader = DataLoader(ext_test_dataset, batch_size=32, shuffle=False)
 
 all_preds = []
 all_targets = []
-
 
 
 for epoch in range(num_epochs):
@@ -313,3 +320,41 @@ for epoch in range(num_epochs):
     plt.show()
 
 print("Training complete")
+
+## ----- Model Evaluation on Internal and External Test Sets ----- ##
+
+def evaluate_model(model, data_loader, device):
+
+    model.eval()
+    all_preds = []
+    all_targets = []
+
+    with torch.no_grad():
+        for sequence_embs, deltaGH, activity in data_loader:
+            sequence_embs = sequence_embs.to(device)
+            deltaGH = deltaGH.to(device)
+            activity = activity.to(device)
+
+            predictions = model(sequence_embs, deltaGH)
+            all_preds.append(predictions.cpu())
+            all_targets.append(activity.cpu())
+
+    all_preds = torch.cat(all_preds).squeeze().numpy()
+    all_targets = torch.cat(all_targets).squeeze().numpy()
+
+    rho, _ = spearmanr(all_targets, all_preds)
+
+    threshold = np.median(all_targets)
+    y_true = (all_targets >= threshold).astype(int)
+    y_score = all_preds
+    auc = roc_auc_score(y_true, y_score)
+
+    return all_preds, all_targets, rho, auc
+
+# Evaluate on internal test set
+int_preds, int_targets, int_rho, int_auc = evaluate_model(model, int_test_loader, device)
+print(f"Internal Test Set - Spearman rho: {int_rho:.4f}, AUC: {int_auc:.4f}")
+
+# Evaluate on external test set
+ext_preds, ext_targets, ext_rho, ext_auc = evaluate_model(model, ext_test_loader, device)
+print(f"External Test Set - Spearman rho: {ext_rho:.4f}, AUC: {ext_auc:.4f}")
