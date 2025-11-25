@@ -140,6 +140,28 @@ class CrossSeqTransformer(nn.Module):
 
         return activity_pred.squeeze(-1)
 
+def adjust_lr(optimizer, epoch, num_epochs):
+    """
+    Adaptive learning rate schedule that scales with total epochs.
+    - First 30% of training (or first 3 epochs, whichever is longer): initial lr (1e-3)
+    - Next 60% of training (or up to epoch 10, whichever is longer): lr / 10 (1e-4)
+    - Final 10% of training: lr / 100 (1e-5)
+    """
+    threshold_1 = max(3, int(0.3 * num_epochs))
+    threshold_2 = max(10, int(0.9 * num_epochs))
+    
+    if epoch < threshold_1:
+        lr = 1e-3
+    elif epoch < threshold_2:
+        lr = 1e-4
+    else:
+        lr = 1e-5
+    
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+    return lr
+
+"""
 def adjust_lr(optimizer, epoch):
     if epoch < 3:          # epochs 1,2,3 → 1e-3
         lr = 1e-3
@@ -151,7 +173,7 @@ def adjust_lr(optimizer, epoch):
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
     return lr
-
+"""
 
 def set_seed(seed=42):
     random.seed(seed)
