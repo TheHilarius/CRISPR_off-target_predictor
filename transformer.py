@@ -271,6 +271,7 @@ for epoch in range(num_epochs):
     print(f"AUC: {auc:.4f}")
 
     # ---- Plot ----
+    plt.figure()
     plt.plot(fpr, tpr)
     plt.plot([0,1],[0,1],'--')
     plt.xlabel("False Positive Rate")
@@ -281,5 +282,7 @@ for epoch in range(num_epochs):
         plt.show()
     elif epoch == num_epochs - 1:
         plt.show()
+    else:
+        plt.close()
 
 print("Training complete")
