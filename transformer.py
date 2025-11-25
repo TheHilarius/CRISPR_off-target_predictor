@@ -161,20 +161,6 @@ def adjust_lr(optimizer, epoch, num_epochs):
         param_group['lr'] = lr
     return lr
 
-"""
-def adjust_lr(optimizer, epoch):
-    if epoch < 3:          # epochs 1,2,3 → 1e-3
-        lr = 1e-3
-    elif epoch < 10:       # epochs 4-10 → 1e-4
-        lr = 1e-4
-    else:                  # epochs  → 1e-5
-        lr = 1e-5
-    
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
-    return lr
-"""
-
 def set_seed(seed=42):
     random.seed(seed)
     np.random.seed(seed)
