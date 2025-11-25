@@ -137,13 +137,22 @@ class CrossSeqTransformer(nn.Module):
 
         return activity_pred.squeeze(-1)
 
-def adjust_lr(optimizer, epoch, base_lr):
-    if epoch < 3:
-        lr = base_lr
-    elif epoch < 10:
-        lr = base_lr * 0.1
+def adjust_lr(optimizer, epoch, num_epochs):
+    """
+    Adaptive learning rate schedule that scales with total epochs.
+    - First 30% of training (or first 3 epochs, whichever is longer): initial lr (1e-3)
+    - Next 60% of training (or up to epoch 10, whichever is longer): lr / 10 (1e-4)
+    - Final 10% of training: lr / 100 (1e-5)
+    """
+    threshold_1 = max(3, int(0.3 * num_epochs))
+    threshold_2 = max(10, int(0.9 * num_epochs))
+    
+    if epoch < threshold_1:
+        lr = 1e-3
+    elif epoch < threshold_2:
+        lr = 1e-4
     else:
-        lr = base_lr * 0.01
+        lr = 1e-5
     
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
@@ -167,10 +176,9 @@ def set_seed(seed=42):
 
 # Define hyperparameter grid
 hyperparameter_grid = {
-    'num_epochs': [10, 100], #100
-    'dropout': [0.5, 0.1, 0.2, 0.3],
-    'batch_size': [16, 32],
-    'initial_lr': [1e-3]
+    'num_epochs': [100], #10
+    'dropout': [0.01, 0.05, 0.1, 0.2, 0.3],
+    'batch_size': [16, 32]
 }
 
 # Store results
@@ -204,144 +212,140 @@ test_activity = torch.log10(test_activity)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Hyperparameter search loop
+# Hyperparameter search loop
 for num_epochs in hyperparameter_grid['num_epochs']:
     for dropout in hyperparameter_grid['dropout']:
         for batch_size in hyperparameter_grid['batch_size']:
-            for initial_lr in hyperparameter_grid['initial_lr']:
-                
-                print(f"\n{'='*80}")
-                print(f"Testing: epochs={num_epochs}, dropout={dropout}, batch_size={batch_size}, lr={initial_lr}")
-                print(f"{'='*80}\n")
-                
-                # Reset seed for reproducibility
-                set_seed(42)
-                
-                # Create model with current dropout
-                model = CrossSeqTransformer(dropout=dropout)
-                criterion = nn.MSELoss()
-                optimizer = torch.optim.Adam(model.parameters(), lr=initial_lr)
-                model = model.to(device)
-                
-                # Create data loaders with current batch_size
-                train_dataset = TensorDataset(train_seq_embs, train_deltaGH_norm, train_activity)
-                train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-                
-                val_dataset = TensorDataset(val_seq_embs, val_deltaGH_norm, val_activity)
-                val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-                
-                test_dataset = TensorDataset(test_seq_embs, test_deltaGH_norm, test_activity)
-                test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+            print(f"\n{'='*80}")
+            print(f"Testing: epochs={num_epochs}, dropout={dropout}, batch_size={batch_size}")
+            print(f"{'='*80}\n")
+            
+            # Reset seed for reproducibility
+            set_seed(42)
+            
+            # Create model with current dropout
+            model = CrossSeqTransformer(dropout=dropout)
+            criterion = nn.MSELoss()
+            optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+            model = model.to(device)
+            
+            # Create data loaders with current batch_size
+            train_dataset = TensorDataset(train_seq_embs, train_deltaGH_norm, train_activity)
+            train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+            
+            val_dataset = TensorDataset(val_seq_embs, val_deltaGH_norm, val_activity)
+            val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+            
+            test_dataset = TensorDataset(test_seq_embs, test_deltaGH_norm, test_activity)
+            test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-                ## -------- Training Loop --------- ##
-                all_preds = []
-                all_targets = []
+            ## -------- Training Loop --------- ##
+            all_preds = []
+            all_targets = []
+            
+            for epoch in range(num_epochs):
                 
-                for epoch in range(num_epochs):
+                current_lr = adjust_lr(optimizer, epoch, num_epochs)
+                
+                epoch_loss = 0
+                num_batches = 0
+                
+                # containers for THIS epoch only
+                epoch_preds = []
+                epoch_targets = []
+                epoch_spearman = []
+                
+                for sequence_embs, deltaGH, activity in train_loader:
+                    sequence_embs = sequence_embs.to(device)
+                    deltaGH = deltaGH.to(device)
+                    activity = activity.to(device)
                     
-                    current_lr = adjust_lr(optimizer, epoch, initial_lr)
+                    predictions = model(sequence_embs, deltaGH)
+                    loss = criterion(predictions, activity.squeeze(-1))
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
                     
-                    epoch_loss = 0
-                    num_batches = 0
+                    epoch_loss += loss.item()
+                    num_batches += 1
                     
-                    # containers for THIS epoch only
-                    epoch_preds = []
-                    epoch_targets = []
-                    epoch_spearman = []
+                    # ---- save predictions for this epoch ----
+                    epoch_preds.append(predictions.detach().cpu())
+                    epoch_targets.append(activity.detach().cpu())
+
+                # ---- combine epoch-level tensors ----
+                epoch_preds = torch.cat(epoch_preds).squeeze().numpy()
+                epoch_targets = torch.cat(epoch_targets).squeeze().numpy()
+
+                # ---- compute Spearman correlation ----
+                rho, p_value = spearmanr(epoch_targets, epoch_preds)
+                epoch_spearman.append(rho)
+
+                # ---- Compute training AUC ----
+                threshold = np.median(epoch_targets)
+                y_true = (epoch_targets >= threshold).astype(int)
+                y_score = epoch_preds
+                train_auc = roc_auc_score(y_true, y_score)
+
+                print(f"Epoch {epoch+1}/{num_epochs}: "
+                      f"loss={epoch_loss/num_batches:.4f}, "
+                      f"Spearman rho={rho:.4f}, "
+                      f"AUC={train_auc:.4f}")
+
+            # Evaluate on validation set (AFTER all epochs complete)
+            model.eval()
+            val_preds = []
+            val_targets = []
+            val_loss = 0
+            val_num_batches = 0
+            
+            with torch.no_grad():
+                for sequence_embs, deltaGH, activity in val_loader:
+                    sequence_embs = sequence_embs.to(device)
+                    deltaGH = deltaGH.to(device)
+                    activity = activity.to(device)
                     
-                    for sequence_embs, deltaGH, activity in train_loader:
-                        sequence_embs = sequence_embs.to(device)
-                        deltaGH = deltaGH.to(device)
-                        activity = activity.to(device)
-                        
-                        predictions = model(sequence_embs, deltaGH)
-                        loss = criterion(predictions, activity.squeeze(-1))
-                        optimizer.zero_grad()
-                        loss.backward()
-                        optimizer.step()
-                        
-                        epoch_loss += loss.item()
-                        num_batches += 1
-                        
-                        # ---- save predictions for this epoch ----
-                        epoch_preds.append(predictions.detach().cpu())
-                        epoch_targets.append(activity.detach().cpu())
-
-                    # ---- combine epoch-level tensors ----
-                    epoch_preds = torch.cat(epoch_preds).squeeze().numpy()
-                    epoch_targets = torch.cat(epoch_targets).squeeze().numpy()
-
-                    # ---- compute Spearman correlation ----
-                    rho, p_value = spearmanr(epoch_targets, epoch_preds)
-                    epoch_spearman.append(rho)
-
-                    # ========== ADD TRAINING AUC HERE ========== #
-                    threshold = np.median(epoch_targets)
-                    y_true = (epoch_targets >= threshold).astype(int)
-                    y_score = epoch_preds
-                    train_auc = roc_auc_score(y_true, y_score)
-                    # ========================================== #
-
-                    print(f"Epoch {epoch+1}/{num_epochs}: "
-                          f"loss={epoch_loss/num_batches:.4f}, "
-                          f"Spearman rho={rho:.4f}, "
-                          f"AUC={train_auc:.4f}")  # ← UPDATE THIS LINE
-
-                # Evaluate on validation set
-                model.eval()
-                val_preds = []
-                val_targets = []
-                val_loss = 0
-                val_num_batches = 0
-                
-                with torch.no_grad():
-                    for sequence_embs, deltaGH, activity in val_loader:
-                        sequence_embs = sequence_embs.to(device)
-                        deltaGH = deltaGH.to(device)
-                        activity = activity.to(device)
-                        
-                        predictions = model(sequence_embs, deltaGH)
-                        loss = criterion(predictions, activity.squeeze(-1))
-                        
-                        val_loss += loss.item()
-                        val_num_batches += 1
-                        
-                        val_preds.append(predictions.cpu())
-                        val_targets.append(activity.cpu())
-                
-                val_preds = torch.cat(val_preds).squeeze().numpy()
-                val_targets = torch.cat(val_targets).squeeze().numpy()
-                val_spearman, _ = spearmanr(val_targets, val_preds)
-                val_loss_avg = val_loss / val_num_batches
-                
-                # ========== ADD VALIDATION AUC HERE ========== #
-                threshold_val = np.median(val_targets)
-                y_true_val = (val_targets >= threshold_val).astype(int)
-                y_score_val = val_preds
-                val_auc = roc_auc_score(y_true_val, y_score_val)
-                # ============================================ #
-                
-                print(f"\nValidation Loss: {val_loss_avg:.4f}, Validation Spearman: {val_spearman:.4f}, Validation AUC: {val_auc:.4f}")  # ← UPDATE THIS LINE
-                
-                # Store results
-                result = {
-                    'num_epochs': num_epochs,
-                    'dropout': dropout,
-                    'batch_size': batch_size,
-                    'initial_lr': initial_lr,
-                    'final_train_loss': epoch_loss/num_batches,
-                    'final_train_spearman': rho,
-                    'final_train_auc': train_auc,  # ← ADD THIS LINE
-                    'val_loss': val_loss_avg,
-                    'val_spearman': val_spearman,
-                    'val_auc': val_auc  # ← ADD THIS LINE
-                }
-                results.append(result)
-                
-                # Track best configuration
-                if val_spearman > best_spearman:
-                    best_spearman = val_spearman
-                    best_config = result.copy()
-                    print(f"\n*** NEW BEST CONFIG! Val Spearman: {val_spearman:.4f} ***")
+                    predictions = model(sequence_embs, deltaGH)
+                    loss = criterion(predictions, activity.squeeze(-1))
+                    
+                    val_loss += loss.item()
+                    val_num_batches += 1
+                    
+                    val_preds.append(predictions.cpu())
+                    val_targets.append(activity.cpu())
+            
+            val_preds = torch.cat(val_preds).squeeze().numpy()
+            val_targets = torch.cat(val_targets).squeeze().numpy()
+            val_spearman, _ = spearmanr(val_targets, val_preds)
+            val_loss_avg = val_loss / val_num_batches
+            
+            # ---- Compute validation AUC ----
+            threshold_val = np.median(val_targets)
+            y_true_val = (val_targets >= threshold_val).astype(int)
+            y_score_val = val_preds
+            val_auc = roc_auc_score(y_true_val, y_score_val)
+            
+            print(f"\nValidation Loss: {val_loss_avg:.4f}, Validation Spearman: {val_spearman:.4f}, Validation AUC: {val_auc:.4f}")
+            
+            # Store results
+            result = {
+                'num_epochs': num_epochs,
+                'dropout': dropout,
+                'batch_size': batch_size,
+                'final_train_loss': epoch_loss/num_batches,
+                'final_train_spearman': rho,
+                'final_train_auc': train_auc,
+                'val_loss': val_loss_avg,
+                'val_spearman': val_spearman,
+                'val_auc': val_auc
+            }
+            results.append(result)
+            
+            # Track best configuration
+            if val_spearman > best_spearman:
+                best_spearman = val_spearman
+                best_config = result.copy()
+                print(f"\n*** NEW BEST CONFIG! Val Spearman: {val_spearman:.4f} ***")
 
 print("\n" + "="*80)
 print("HYPERPARAMETER SEARCH COMPLETE")
