@@ -220,6 +220,7 @@ for epoch in range(num_epochs):
     
     current_lr = adjust_lr(optimizer, epoch)
     
+    model.train()  # Set to training mode
     epoch_loss = 0
     num_batches = 0
     
@@ -258,31 +259,77 @@ for epoch in range(num_epochs):
     rho, p_value = spearmanr(epoch_targets, epoch_preds)
     epoch_spearman.append(rho)
 
+    # ---- Compute training AUC ----
+    train_auc = roc_auc_score(y_true, y_score)
+
     print(f"Epoch {epoch+1}: "
-          f"loss={epoch_loss/num_batches:.4f}, "
-          f"Spearman rho={rho:.4f}")
+          f"Training loss={epoch_loss/num_batches:.4f}, "
+          f"Training Spearman rho={rho:.4f}, "
+          f"Training AUC={train_auc:.4f}")
     
-    # ---- Compute ROC curve ----
-    fpr, tpr, thresholds = roc_curve(y_true, y_score)
+    # ========== VALIDATION EVALUATION ========== #
+    model.eval()  # Set to evaluation mode
+    val_preds = []
+    val_targets = []
+    val_loss = 0
+    val_num_batches = 0
+    
+    with torch.no_grad():
+        for sequence_embs, deltaGH, activity in val_loader:
+            sequence_embs = sequence_embs.to(device)
+            deltaGH = deltaGH.to(device)
+            activity = activity.to(device)
+            
+            predictions = model(sequence_embs, deltaGH)
+            loss = criterion(predictions, activity.squeeze(-1))
+            
+            val_loss += loss.item()
+            val_num_batches += 1
+            
+            val_preds.append(predictions.cpu())
+            val_targets.append(activity.cpu())
+    
+    val_preds = torch.cat(val_preds).squeeze().numpy()
+    val_targets = torch.cat(val_targets).squeeze().numpy()
+    val_spearman, _ = spearmanr(val_targets, val_preds)
+    val_loss_avg = val_loss / val_num_batches
+    
+    # ---- Compute validation AUC ----
+    threshold_val = np.median(val_targets)
+    y_true_val = (val_targets >= threshold_val).astype(int)
+    y_score_val = val_preds
+    val_auc = roc_auc_score(y_true_val, y_score_val)
+    
+    print(f"         Validation loss={val_loss_avg:.4f}, "
+          f"Validation Spearman={val_spearman:.4f}, "
+          f"Validation AUC={val_auc:.4f}\n")
+    # =========================================== #
 
-    # ---- Compute AUC ----
-    auc = roc_auc_score(y_true, y_score)
-
-    print(f"AUC: {auc:.4f}")
-
-    # ---- Plot ----
-    plt.figure()
-    plt.plot(fpr, tpr)
-    plt.plot([0,1],[0,1],'--')
-    plt.xlabel("False Positive Rate")
-    plt.ylabel("True Positive Rate")
-    plt.title(f"ROC Curve (AUC={auc:.4f})")
-    # if epoch is last, show plot
-    if epoch == 0:
+    # ---- Plot ROC (only for final epoch) ----
+    if epoch == num_epochs - 1:
+        plt.figure(figsize=(12, 5))
+        
+        # Training ROC
+        plt.subplot(1, 2, 1)
+        fpr_train, tpr_train, _ = roc_curve(y_true, y_score)
+        plt.plot(fpr_train, tpr_train, label=f'Train (AUC={train_auc:.4f})')
+        plt.plot([0,1],[0,1],'--', color='gray')
+        plt.xlabel("False Positive Rate")
+        plt.ylabel("True Positive Rate")
+        plt.title("Training ROC Curve")
+        plt.legend()
+        
+        # Validation ROC
+        plt.subplot(1, 2, 2)
+        fpr_val, tpr_val, _ = roc_curve(y_true_val, y_score_val)
+        plt.plot(fpr_val, tpr_val, label=f'Val (AUC={val_auc:.4f})', color='orange')
+        plt.plot([0,1],[0,1],'--', color='gray')
+        plt.xlabel("False Positive Rate")
+        plt.ylabel("True Positive Rate")
+        plt.title("Validation ROC Curve")
+        plt.legend()
+        
+        plt.tight_layout()
         plt.show()
-    elif epoch == num_epochs - 1:
-        plt.show()
-    else:
-        plt.close()
 
 print("Training complete")
