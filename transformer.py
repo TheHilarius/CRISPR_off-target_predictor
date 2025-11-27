@@ -21,6 +21,11 @@ train_data =torch.load("data/train_embeddings.pt")
 val_data = torch.load("data/val_embeddings.pt")
 test_data = torch.load("data/test_embeddings.pt")
 
+# Hyperparameters
+num_epochs = 10 # 100
+dropout = 0.05
+batch_size = 32
+
 class CrossSeqTransformer(nn.Module):
     def __init__(self, vocab_size=6, d_model=128, nhead=8,          # WHY SHOULD VOCAB SIZE BE 6??
                   num_encoder_layers=3, num_decoder_layers=3,
@@ -176,14 +181,10 @@ def set_seed(seed=42):
     os.environ['PYTHONHASHSEED'] = str(seed)
 
 ## -------- Training Loop --------- ##
-
-# for dropout in dropout (add different dropout values to CrossSeqTransformer)
 set_seed(42)
-model = CrossSeqTransformer()
+model = CrossSeqTransformer(dropout=dropout)
 criterion = nn.MSELoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-
-num_epochs = 10
 
 # Prepare data
 train_seq_embs = train_data['sequence_embs']
@@ -191,14 +192,14 @@ train_delta = train_data['deltaGH'].unsqueeze(-1) if train_data['deltaGH'].dim()
 train_activity = train_data['activity'].unsqueeze(-1) if train_data['activity'].dim() == 1 else train_data['activity']
 train_activity = torch.log10(train_activity)
 
-# Normalizing (DO THIS FIRST!)
+# Normalizing
 train_deltaGH_min = train_data['deltaGH'].min()
 train_deltaGH_max = train_data['deltaGH'].max()
 train_deltaGH_norm = (train_delta - train_deltaGH_min) / (train_deltaGH_max - train_deltaGH_min)
 
 # Create dataset with NORMALIZED data
 train_dataset = TensorDataset(train_seq_embs, train_deltaGH_norm, train_activity)
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model = model.to(device)
@@ -210,7 +211,7 @@ val_activity = val_data['activity'].unsqueeze(-1) if val_data['activity'].dim() 
 val_activity = torch.log10(val_activity)
 
 val_dataset = TensorDataset(val_seq_embs, val_deltaGH_norm, val_activity)
-val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
 test_seq_embs = test_data['sequence_embs']
 test_deltaGH = test_data['deltaGH'].unsqueeze(-1) if test_data['deltaGH'].dim() == 1 else test_data['deltaGH']
@@ -219,16 +220,16 @@ test_activity = test_data['activity'].unsqueeze(-1) if test_data['activity'].dim
 test_activity = torch.log10(test_activity)
 
 test_dataset = TensorDataset(test_seq_embs, test_deltaGH_norm, test_activity)
-test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
 all_preds = []
 all_targets = []
 
 for epoch in range(num_epochs):
     
-    current_lr = adjust_lr(optimizer, epoch)
+    current_lr = adjust_lr(optimizer, epoch, num_epochs)
     
-    model.train()  # Set to training mode
+    model.train()  # initialize training of model
     epoch_loss = 0
     num_batches = 0
     
@@ -315,29 +316,27 @@ for epoch in range(num_epochs):
 
     # ---- Plot ROC (only for final epoch) ----
     if epoch == num_epochs - 1:
-        plt.figure(figsize=(12, 5))
+        plt.figure(figsize=(8, 6))
         
-        # Training ROC
-        plt.subplot(1, 2, 1)
+        # Plot both Training and Validation ROC on same axes
         fpr_train, tpr_train, _ = roc_curve(y_true, y_score)
-        plt.plot(fpr_train, tpr_train, label=f'Train (AUC={train_auc:.4f})')
-        plt.plot([0,1],[0,1],'--', color='gray')
-        plt.xlabel("False Positive Rate")
-        plt.ylabel("True Positive Rate")
-        plt.title("Training ROC Curve")
-        plt.legend()
-        
-        # Validation ROC
-        plt.subplot(1, 2, 2)
         fpr_val, tpr_val, _ = roc_curve(y_true_val, y_score_val)
-        plt.plot(fpr_val, tpr_val, label=f'Val (AUC={val_auc:.4f})', color='orange')
-        plt.plot([0,1],[0,1],'--', color='gray')
-        plt.xlabel("False Positive Rate")
-        plt.ylabel("True Positive Rate")
-        plt.title("Validation ROC Curve")
-        plt.legend()
+        
+        plt.plot(fpr_train, tpr_train, label=f'Training (AUC={train_auc:.4f})', linewidth=2)
+        plt.plot(fpr_val, tpr_val, label=f'Validation (AUC={val_auc:.4f})', linewidth=2, color='orange')
+        plt.plot([0,1],[0,1],'--', color='gray', label='Random Classifier')
+        
+        plt.xlabel("False Positive Rate", fontsize=12)
+        plt.ylabel("True Positive Rate", fontsize=12)
+        plt.title("ROC Curves - Training vs Validation", fontsize=14)
+        plt.legend(loc='lower right', fontsize=11)
+        plt.grid(alpha=0.3)
         
         plt.tight_layout()
+
+        plt.savefig(f'roc_curve_dropout{dropout}_batch{batch_size}_epochs{num_epochs}.png', dpi=300, bbox_inches='tight')
+        print(f"ROC curve saved as 'roc_curve_dropout{dropout}_batch{batch_size}_epochs{num_epochs}.png'")
+
         plt.show()
 
 print("Training complete")
