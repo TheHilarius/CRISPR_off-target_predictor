@@ -177,7 +177,7 @@ def set_seed(seed=42):
 # Define hyperparameter grid
 hyperparameter_grid = {
     'num_epochs': [100], #10
-    'dropout': [0.01, 0.05, 0.1, 0.2, 0.3],
+    'dropout': [0.01, 0.05, 0.1, 0.2, 0.3], # Add 0.00 
     'batch_size': [16, 32]
 }
 
@@ -211,7 +211,6 @@ test_activity = torch.log10(test_activity)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# Hyperparameter search loop
 # Hyperparameter search loop
 for num_epochs in hyperparameter_grid['num_epochs']:
     for dropout in hyperparameter_grid['dropout']:
