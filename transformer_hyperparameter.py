@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 
-# https://docs.pytorch.org/docs/stable/generated/torch.nn.modules.transformer.Transformer.html
-
 import torch
 from torch import nn
 from torch.utils.data import TensorDataset, DataLoader
 from sklearn.metrics import roc_curve, roc_auc_score
 import torch.optim as optim
-from tqdm import tqdm
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -15,33 +12,34 @@ from scipy.stats import spearmanr
 import random
 import os
 
-train_data =torch.load("data/train_embeddings.pt")
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
+train_data = torch.load("data/train_embeddings.pt")
 val_data = torch.load("data/val_embeddings.pt")
 test_data = torch.load("data/test_embeddings.pt")
-       
+
 class CrossSeqTransformer(nn.Module):
-    def __init__(self, vocab_size=6, d_model=128, nhead=8,          # WHY SHOULD VOCAB SIZE BE 6??
+    def __init__(self, vocab_size=6, d_model=128, nhead=8,
                   num_encoder_layers=3, num_decoder_layers=3,
                   max_len=47, dropout=0.1, dg_embedding_dim=16):
          super().__init__()
          
          # Token embeddings
          self.token_embed = nn.Embedding(vocab_size, d_model)
-         self.pos_embed = nn.Embedding(max_len, d_model) # positional encoding
+         self.pos_embed = nn.Embedding(max_len, d_model)
          
          # Transformer (encoder-decoder)
          self.transformer = nn.Transformer(
              d_model=d_model,
-             nhead=nhead, # multihead attention
+             nhead=nhead,
              num_encoder_layers=num_encoder_layers,
              num_decoder_layers=num_decoder_layers,
              dim_feedforward=4*d_model,
              dropout=dropout,
              batch_first=True
          )
-         # ---------------------------
+         
          # Transformer Encoder
-         # ---------------------------
          encoder_layer = nn.TransformerEncoderLayer(
              d_model=d_model,
              nhead=nhead,
@@ -54,20 +52,16 @@ class CrossSeqTransformer(nn.Module):
              num_layers=num_encoder_layers
          )
 
-         # ---------------------------
-         # Bottleneck MLP (between encoder and decoder)
-         # ---------------------------
+         # Bottleneck MLP
          self.mlp_bottleneck = nn.Sequential(
              nn.Linear(d_model, 512),
              nn.GELU(),
              nn.Dropout(dropout),
-             nn.Linear(512, d_model),   # final dimension returned to decoder
+             nn.Linear(512, d_model),
              nn.GELU(),
          )
 
-         # ---------------------------
          # Transformer Decoder
-         # ---------------------------
          decoder_layer = nn.TransformerDecoderLayer(
              d_model=d_model,
              nhead=nhead,
@@ -80,14 +74,10 @@ class CrossSeqTransformer(nn.Module):
              num_layers=num_decoder_layers
          )
 
-         # ---------------------------
          # deltaGH embedding
-         # ---------------------------
          self.dg_embed = nn.Linear(1, dg_embedding_dim)
 
-         # ---------------------------
          # Regression head
-         # ---------------------------
          combined_dim = d_model + dg_embedding_dim
 
          self.regressor = nn.Sequential(
@@ -113,17 +103,17 @@ class CrossSeqTransformer(nn.Module):
         device = sequence_embs.device
 
         # Positional encoding
-        pos = torch.arange(L, device=device).unsqueeze(0).expand(B,-1) # position indices
+        pos = torch.arange(L, device=device).unsqueeze(0).expand(B,-1)
 
         # Embed sequences for encoder-decoder architecture
         seq_embed = self.token_embed(sequence_embs) + self.pos_embed(pos)
         on_target = seq_embed[:, :23, :]
         off_target = seq_embed[:, 24:, :]
 
-        # Transformer expects (batch, seq, dim)
-        out = self.transformer(on_target, off_target)  # shape [B, L, d_model]
+        # Transformer
+        out = self.transformer(on_target, off_target)
 
-        # Mean pooling sequence length
+        # Mean pooling
         pooled = out.mean(dim=1)
         
         # delta G embedding
@@ -140,9 +130,6 @@ class CrossSeqTransformer(nn.Module):
 def adjust_lr(optimizer, epoch, num_epochs):
     """
     Adaptive learning rate schedule that scales with total epochs.
-    - First 30% of training (or first 3 epochs, whichever is longer): initial lr (1e-3)
-    - Next 60% of training (or up to epoch 10, whichever is longer): lr / 10 (1e-4)
-    - Final 10% of training: lr / 100 (1e-5)
     """
     threshold_1 = max(3, int(0.3 * num_epochs))
     threshold_2 = max(10, int(0.9 * num_epochs))
@@ -169,16 +156,16 @@ def set_seed(seed=42):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-    # Optional: makes dataloader workers deterministic
+    # Makes dataloader workers deterministic
     os.environ['PYTHONHASHSEED'] = str(seed)
 
 ## -------- HYPERPARAMETER TESTING --------- ##
 
 # Define hyperparameter grid
 hyperparameter_grid = {
-    'num_epochs': [100], #10
-    'dropout': [0.01, 0.05, 0.1, 0.2, 0.3], # Add 0.00 
-    'batch_size': [16, 32]
+    'num_epochs': [10, 25, 50, 75, 100], 
+    'dropout': [0.01, 0.05, 0.10, 0.20], 
+    'batch_size': [32, 64]
 }
 
 # Store results
@@ -186,7 +173,7 @@ results = []
 best_spearman = -np.inf
 best_config = None
 
-# Prepare data once
+# Prepare data once (BEFORE setting seed)
 train_seq_embs = train_data['sequence_embs']
 train_delta = train_data['deltaGH'].unsqueeze(-1) if train_data['deltaGH'].dim() == 1 else train_data['deltaGH']
 train_activity = train_data['activity'].unsqueeze(-1) if train_data['activity'].dim() == 1 else train_data['activity']
@@ -239,20 +226,22 @@ for num_epochs in hyperparameter_grid['num_epochs']:
             test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
             ## -------- Training Loop --------- ##
-            all_preds = []
-            all_targets = []
+            train_losses = []
+            val_losses = []
+            train_spearmans = []
+            val_spearmans = []
             
             for epoch in range(num_epochs):
                 
                 current_lr = adjust_lr(optimizer, epoch, num_epochs)
                 
+                model.train()  # Set to training mode
                 epoch_loss = 0
                 num_batches = 0
                 
                 # containers for THIS epoch only
                 epoch_preds = []
                 epoch_targets = []
-                epoch_spearman = []
                 
                 for sequence_embs, deltaGH, activity in train_loader:
                     sequence_embs = sequence_embs.to(device)
@@ -268,74 +257,134 @@ for num_epochs in hyperparameter_grid['num_epochs']:
                     epoch_loss += loss.item()
                     num_batches += 1
                     
-                    # ---- save predictions for this epoch ----
+                    # save predictions for this epoch
                     epoch_preds.append(predictions.detach().cpu())
                     epoch_targets.append(activity.detach().cpu())
 
-                # ---- combine epoch-level tensors ----
+                # combine epoch-level tensors
                 epoch_preds = torch.cat(epoch_preds).squeeze().numpy()
                 epoch_targets = torch.cat(epoch_targets).squeeze().numpy()
 
-                # ---- compute Spearman correlation ----
+                # compute Spearman correlation
                 rho, p_value = spearmanr(epoch_targets, epoch_preds)
-                epoch_spearman.append(rho)
 
-                # ---- Compute training AUC ----
+                # Compute training AUC
                 threshold = np.median(epoch_targets)
                 y_true = (epoch_targets >= threshold).astype(int)
                 y_score = epoch_preds
                 train_auc = roc_auc_score(y_true, y_score)
 
                 print(f"Epoch {epoch+1}/{num_epochs}: "
-                      f"loss={epoch_loss/num_batches:.4f}, "
-                      f"Spearman rho={rho:.4f}, "
-                      f"AUC={train_auc:.4f}")
+                      f"Training loss={epoch_loss/num_batches:.4f}, "
+                      f"Training Spearman rho={rho:.4f}, "
+                      f"Training AUC={train_auc:.4f}")
+                
+                train_losses.append(epoch_loss/num_batches)
+                train_spearmans.append(rho)
+                
+                # ========== VALIDATION EVALUATION ========== #
+                model.eval()  # Set to evaluation mode
+                val_preds = []
+                val_targets = []
+                val_loss = 0
+                val_num_batches = 0
+                
+                with torch.no_grad():
+                    for sequence_embs, deltaGH, activity in val_loader:
+                        sequence_embs = sequence_embs.to(device)
+                        deltaGH = deltaGH.to(device)
+                        activity = activity.to(device)
+                        
+                        predictions = model(sequence_embs, deltaGH)
+                        loss = criterion(predictions, activity.squeeze(-1))
+                        
+                        val_loss += loss.item()
+                        val_num_batches += 1
+                        
+                        val_preds.append(predictions.cpu())
+                        val_targets.append(activity.cpu())
+                
+                val_preds = torch.cat(val_preds).squeeze().numpy()
+                val_targets = torch.cat(val_targets).squeeze().numpy()
+                val_spearman, _ = spearmanr(val_targets, val_preds)
+                val_loss_avg = val_loss / val_num_batches
+                
+                # Compute validation AUC
+                threshold_val = np.median(val_targets)
+                y_true_val = (val_targets >= threshold_val).astype(int)
+                y_score_val = val_preds
+                val_auc = roc_auc_score(y_true_val, y_score_val)
+                
+                print(f"         Validation loss={val_loss_avg:.4f}, "
+                      f"Validation Spearman={val_spearman:.4f}, "
+                      f"Validation AUC={val_auc:.4f}\n")
+                
+                val_losses.append(val_loss_avg)
+                val_spearmans.append(val_spearman)
+                # =========================================== #
 
-            # Evaluate on validation set (AFTER all epochs complete)
-            model.eval()
-            val_preds = []
-            val_targets = []
-            val_loss = 0
-            val_num_batches = 0
+            # ---- Plot ROC (after training complete) ----
+            plt.figure(figsize=(8, 6))
             
-            with torch.no_grad():
-                for sequence_embs, deltaGH, activity in val_loader:
-                    sequence_embs = sequence_embs.to(device)
-                    deltaGH = deltaGH.to(device)
-                    activity = activity.to(device)
-                    
-                    predictions = model(sequence_embs, deltaGH)
-                    loss = criterion(predictions, activity.squeeze(-1))
-                    
-                    val_loss += loss.item()
-                    val_num_batches += 1
-                    
-                    val_preds.append(predictions.cpu())
-                    val_targets.append(activity.cpu())
+            # Plot both Training and Validation ROC on same axes
+            fpr_train, tpr_train, _ = roc_curve(y_true, y_score)
+            fpr_val, tpr_val, _ = roc_curve(y_true_val, y_score_val)
             
-            val_preds = torch.cat(val_preds).squeeze().numpy()
-            val_targets = torch.cat(val_targets).squeeze().numpy()
-            val_spearman, _ = spearmanr(val_targets, val_preds)
-            val_loss_avg = val_loss / val_num_batches
+            plt.plot(fpr_train, tpr_train, label=f'Training (AUC={train_auc:.4f})', linewidth=2)
+            plt.plot(fpr_val, tpr_val, label=f'Validation (AUC={val_auc:.4f})', linewidth=2, color='orange')
+            plt.plot([0,1],[0,1],'--', color='gray', label='Random Classifier')
             
-            # ---- Compute validation AUC ----
-            threshold_val = np.median(val_targets)
-            y_true_val = (val_targets >= threshold_val).astype(int)
-            y_score_val = val_preds
-            val_auc = roc_auc_score(y_true_val, y_score_val)
+            plt.xlabel("False Positive Rate", fontsize=12)
+            plt.ylabel("True Positive Rate", fontsize=12)
+            plt.title(f"ROC Curves - dropout={dropout}, batch={batch_size}", fontsize=14)
+            plt.legend(loc='lower right', fontsize=11)
+            plt.grid(alpha=0.3)
             
-            print(f"\nValidation Loss: {val_loss_avg:.4f}, Validation Spearman: {val_spearman:.4f}, Validation AUC: {val_auc:.4f}")
+            plt.tight_layout()
+            
+            roc_filename = f'roc_curve_dropout{dropout}_batch{batch_size}_epochs{num_epochs}.png'
+            plt.savefig(roc_filename, dpi=300, bbox_inches='tight')
+            print(f"ROC curve saved as '{roc_filename}'")
+            plt.close()
+
+            # ---- Plot Training Curves ----
+            fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+            # Loss plot
+            axes[0].plot(range(1, num_epochs+1), train_losses, label='Training Loss', linewidth=2, marker='o', markersize=3)
+            axes[0].plot(range(1, num_epochs+1), val_losses, label='Validation Loss', linewidth=2, marker='o', markersize=3, color='orange')
+            axes[0].set_xlabel('Epoch', fontsize=12)
+            axes[0].set_ylabel('Loss (MSE)', fontsize=12)
+            axes[0].set_title('Training and Validation Loss', fontsize=14)
+            axes[0].legend(fontsize=11)
+            axes[0].grid(alpha=0.3)
+
+            # Spearman plot
+            axes[1].plot(range(1, num_epochs+1), train_spearmans, label='Training Spearman', linewidth=2, marker='o', markersize=3)
+            axes[1].plot(range(1, num_epochs+1), val_spearmans, label='Validation Spearman', linewidth=2, marker='o', markersize=3, color='orange')
+            axes[1].set_xlabel('Epoch', fontsize=12)
+            axes[1].set_ylabel('Spearman Correlation', fontsize=12)
+            axes[1].set_title('Training and Validation Spearman Correlation', fontsize=14)
+            axes[1].legend(fontsize=11)
+            axes[1].grid(alpha=0.3)
+
+            plt.tight_layout()
+            
+            curves_filename = f'training_curves_dropout{dropout}_batch{batch_size}_epochs{num_epochs}.png'
+            plt.savefig(curves_filename, dpi=300, bbox_inches='tight')
+            print(f"Training curves saved as '{curves_filename}'\n")
+            plt.close()
             
             # Store results
             result = {
                 'num_epochs': num_epochs,
                 'dropout': dropout,
                 'batch_size': batch_size,
-                'final_train_loss': epoch_loss/num_batches,
-                'final_train_spearman': rho,
+                'final_train_loss': train_losses[-1],
+                'final_train_spearman': train_spearmans[-1],
                 'final_train_auc': train_auc,
-                'val_loss': val_loss_avg,
-                'val_spearman': val_spearman,
+                'val_loss': val_losses[-1],
+                'val_spearman': val_spearmans[-1],
                 'val_auc': val_auc
             }
             results.append(result)
@@ -364,7 +413,7 @@ for key, value in best_config.items():
     print(f"{key}: {value}")
 
 # Save results to CSV
-results_df.to_csv('hyperparameter_results1.csv', index=False)
-print("\nResults saved to 'hyperparameter_results.csv'")
+results_df.to_csv('hyperparameter_results_with_plots.csv', index=False)
+print("\nResults saved to 'hyperparameter_results_with_plots.csv'")
 
 print("Training complete")

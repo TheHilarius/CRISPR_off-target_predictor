@@ -22,9 +22,9 @@ val_data = torch.load("data/val_embeddings.pt")
 test_data = torch.load("data/test_embeddings.pt")
 
 # Hyperparameters
-num_epochs = 10 # 100
-dropout = 0.05
-batch_size = 32
+num_epochs = 100 # 100
+dropout = 0.05 # 0.05 # 0.5
+batch_size = 32 # 32
 
 class CrossSeqTransformer(nn.Module):
     def __init__(self, vocab_size=6, d_model=128, nhead=8,          # WHY SHOULD VOCAB SIZE BE 6??
@@ -225,6 +225,11 @@ test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 all_preds = []
 all_targets = []
 
+train_losses = []
+val_losses = []
+train_spearmans = []
+val_spearmans = []
+
 for epoch in range(num_epochs):
     
     current_lr = adjust_lr(optimizer, epoch, num_epochs)
@@ -276,6 +281,9 @@ for epoch in range(num_epochs):
           f"Training Spearman rho={rho:.4f}, "
           f"Training AUC={train_auc:.4f}")
     
+    train_losses.append(epoch_loss/num_batches)
+    train_spearmans.append(rho)
+    
     # ========== VALIDATION EVALUATION ========== #
     model.eval()  # Set to evaluation mode
     val_preds = []
@@ -312,6 +320,9 @@ for epoch in range(num_epochs):
     print(f"         Validation loss={val_loss_avg:.4f}, "
           f"Validation Spearman={val_spearman:.4f}, "
           f"Validation AUC={val_auc:.4f}\n")
+    
+    val_losses.append(val_loss_avg)
+    val_spearmans.append(val_spearman)
     # =========================================== #
 
     # ---- Plot ROC (only for final epoch) ----
@@ -340,3 +351,29 @@ for epoch in range(num_epochs):
         plt.show()
 
 print("Training complete")
+
+# ---- Plot Training Curves ----
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+# Loss plot
+axes[0].plot(range(1, num_epochs+1), train_losses, label='Training Loss', linewidth=2, marker='o')
+axes[0].plot(range(1, num_epochs+1), val_losses, label='Validation Loss', linewidth=2, marker='o', color='orange')
+axes[0].set_xlabel('Epoch', fontsize=12)
+axes[0].set_ylabel('Loss (MSE)', fontsize=12)
+axes[0].set_title('Training and Validation Loss', fontsize=14)
+axes[0].legend(fontsize=11)
+axes[0].grid(alpha=0.3)
+
+# Spearman plot
+axes[1].plot(range(1, num_epochs+1), train_spearmans, label='Training Spearman', linewidth=2, marker='o')
+axes[1].plot(range(1, num_epochs+1), val_spearmans, label='Validation Spearman', linewidth=2, marker='o', color='orange')
+axes[1].set_xlabel('Epoch', fontsize=12)
+axes[1].set_ylabel('Spearman Correlation', fontsize=12)
+axes[1].set_title('Training and Validation Spearman Correlation', fontsize=14)
+axes[1].legend(fontsize=11)
+axes[1].grid(alpha=0.3)
+
+plt.tight_layout()
+plt.savefig(f'training_curves_dropout{dropout}_batch{batch_size}_epochs{num_epochs}.png', dpi=300, bbox_inches='tight')
+print(f"Training curves saved as 'training_curves_dropout{dropout}_batch{batch_size}_epochs{num_epochs}.png'")
+plt.show()
