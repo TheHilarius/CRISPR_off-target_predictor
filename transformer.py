@@ -22,24 +22,6 @@ val_data = torch.load("data/val_embeddings.pt")
 int_test_data = torch.load("data/test_embeddings.pt")
 ext_test_data = torch.load("data/ext_test_embeddings.pt")
 
-# print(f"Train data keys: {train_data.keys()}")
-# print(f"Validation data keys: {val_data.keys()}")   
-# print(f"Test data keys: {test_data.keys()}")
-
-# print(f"\nTrain sequence_embs shape: {train_data['sequence_embs'].shape}")
-# print(f"Train deltaGH shape: {train_data['deltaGH'].shape}")
-# print(f"Train activity shape: {train_data['activity'].shape}")
-
-# print(f"\nVal sequence_embs shape: {val_data['sequence_embs'].shape}")
-# print(f"Val activity shape: {val_data['activity'].shape}")
-
-# print(f"\nTest sequence_embs shape: {test_data['sequence_embs'].shape}")
-# print(f"Test activity shape: {test_data['activity'].shape}")
-
-# global flag for advanced or simple regressor
-use_advanced_regressor = True
-
-       
 class CrossSeqTransformer(nn.Module):
     def __init__(self, vocab_size=6, d_model=128, nhead=8,          # WHY SHOULD VOCAB SIZE BE 6??
                   num_encoder_layers=3, num_decoder_layers=3,
@@ -61,7 +43,7 @@ class CrossSeqTransformer(nn.Module):
              batch_first=True
          )
          
-  # ---------------------------
+         # ---------------------------
          # Transformer Encoder
          # ---------------------------
          encoder_layer = nn.TransformerEncoderLayer(
@@ -112,33 +94,23 @@ class CrossSeqTransformer(nn.Module):
          # ---------------------------
          combined_dim = d_model + dg_embedding_dim
 
-         if use_advanced_regressor:
-             self.regressor = nn.Sequential(
-                 nn.Linear(combined_dim, 512),
-                 nn.BatchNorm1d(512),
-                 nn.ReLU(),
+         self.regressor = nn.Sequential(
+             nn.Linear(combined_dim, 512),
+             nn.BatchNorm1d(512),
+             nn.ReLU(),
 
-                 nn.Linear(512, 256),
-                 nn.BatchNorm1d(256),
-                 nn.GELU(),
-
-                 nn.Linear(256, 128),
-                 nn.ReLU(),
-
-                 nn.Linear(128, 64),
-                 nn.GELU(),
-
-                 nn.Linear(64, 1),
-             )
-         else:
-             self.regressor = nn.Sequential(
-                 nn.Linear(combined_dim, 256),
-                 nn.ReLU(),
-                 nn.Dropout(dropout),
-                 nn.Linear(256, 128),
-                 nn.ReLU(),
-                 nn.Dropout(dropout),
-                 nn.Linear(128, 1))
+             nn.Linear(512, 256),
+             nn.BatchNorm1d(256),
+             nn.GELU(),
+             
+             nn.Linear(256, 128),
+             nn.ReLU(),
+             
+             nn.Linear(128, 64),
+             nn.GELU(),
+             
+             nn.Linear(64, 1),
+         )
 
     def forward(self, sequence_embs, deltaGH):
         B, L = sequence_embs.shape
@@ -169,18 +141,26 @@ class CrossSeqTransformer(nn.Module):
 
         return activity_pred.squeeze(-1)
 
-def adjust_lr(optimizer, epoch):
-    if epoch < 3:          # epochs 1,2,3 → 1e-3
+def adjust_lr(optimizer, epoch, num_epochs):
+    """
+    Adaptive learning rate schedule that scales with total epochs.
+    - First 30% of training (or first 3 epochs, whichever is longer): initial lr (1e-3)
+    - Next 60% of training (or up to epoch 10, whichever is longer): lr / 10 (1e-4)
+    - Final 10% of training: lr / 100 (1e-5)
+    """
+    threshold_1 = max(3, int(0.3 * num_epochs))
+    threshold_2 = max(10, int(0.9 * num_epochs))
+    
+    if epoch < threshold_1:
         lr = 1e-3
-    elif epoch < 10:        # epochs 4-10 → 1e-4
+    elif epoch < threshold_2:
         lr = 1e-4
-    else:                  # epochs  → 1e-5
+    else:
         lr = 1e-5
     
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
     return lr
-
 
 def set_seed(seed=42):
     random.seed(seed)
@@ -197,43 +177,40 @@ def set_seed(seed=42):
     os.environ['PYTHONHASHSEED'] = str(seed)
 
 ## -------- Training Loop --------- ##
-
-# for dropout in dropout (add different dropout values to CrossSeqTransformer)
 set_seed(42)
-model = CrossSeqTransformer()
+model = CrossSeqTransformer(dropout=dropout)
 criterion = nn.MSELoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
-## NOTE: 10 epochs and batches for now
-num_epochs = 10
-
+# Prepare data
 train_seq_embs = train_data['sequence_embs']
 train_delta = train_data['deltaGH'].unsqueeze(-1) if train_data['deltaGH'].dim() == 1 else train_data['deltaGH']
 train_activity = train_data['activity'].unsqueeze(-1) if train_data['activity'].dim() == 1 else train_data['activity']
-train_activity = np.log10(train_activity)
-
-train_dataset = TensorDataset(train_seq_embs, train_delta, train_activity)
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model = model.to(device)
+train_activity = torch.log10(train_activity)
 
 # Normalizing
 train_deltaGH_min = train_data['deltaGH'].min()
 train_deltaGH_max = train_data['deltaGH'].max()
-train_deltaGH_norm = (train_delta - train_deltaGH_min) / (train_deltaGH_max - train_deltaGH_min)   ## MAKE SURE NORMALIZATION IS CORRECT
+train_deltaGH_norm = (train_delta - train_deltaGH_min) / (train_deltaGH_max - train_deltaGH_min)
+
+# Create dataset with NORMALIZED data
+train_dataset = TensorDataset(train_seq_embs, train_deltaGH_norm, train_activity)
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model = model.to(device)
 
 train_dataset = TensorDataset(train_seq_embs, train_deltaGH_norm, train_activity)
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 
 val_seq_embs = val_data['sequence_embs']
 val_deltaGH = val_data['deltaGH'].unsqueeze(-1) if val_data['deltaGH'].dim() == 1 else val_data['deltaGH']
-val_deltaGH_norm = (val_deltaGH - train_deltaGH_min) / (train_deltaGH_max - train_deltaGH_min) # Normalizing
+val_deltaGH_norm = (val_deltaGH - train_deltaGH_min) / (train_deltaGH_max - train_deltaGH_min)
 val_activity = val_data['activity'].unsqueeze(-1) if val_data['activity'].dim() == 1 else val_data['activity']
 val_activity = np.log10(val_activity)
 
 val_dataset = TensorDataset(val_seq_embs, val_deltaGH_norm, val_activity)
-val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
 int_test_seq_embs = int_test_data['sequence_embs']
 int_test_deltaGH = int_test_data['deltaGH'].unsqueeze(-1) if int_test_data['deltaGH'].dim() == 1 else int_test_data['deltaGH']
@@ -259,8 +236,9 @@ all_targets = []
 
 for epoch in range(num_epochs):
     
-    current_lr = adjust_lr(optimizer, epoch)
+    current_lr = adjust_lr(optimizer, epoch, num_epochs)
     
+    model.train()  # initialize training of model
     epoch_loss = 0
     num_batches = 0
     
@@ -299,25 +277,82 @@ for epoch in range(num_epochs):
     rho, p_value = spearmanr(epoch_targets, epoch_preds)
     epoch_spearman.append(rho)
 
+    # ---- Compute training AUC ----
+    train_auc = roc_auc_score(y_true, y_score)
+
     print(f"Epoch {epoch+1}: "
-          f"loss={epoch_loss/num_batches:.4f}, "
-          f"Spearman rho={rho:.4f}")
+          f"Training loss={epoch_loss/num_batches:.4f}, "
+          f"Training Spearman rho={rho:.4f}, "
+          f"Training AUC={train_auc:.4f}")
     
-    # ---- Compute ROC curve ----
-    fpr, tpr, thresholds = roc_curve(y_true, y_score)
+    train_losses.append(epoch_loss/num_batches)
+    train_spearmans.append(rho)
+    
+    # ========== VALIDATION EVALUATION ========== #
+    model.eval()  # Set to evaluation mode
+    val_preds = []
+    val_targets = []
+    val_loss = 0
+    val_num_batches = 0
+    
+    with torch.no_grad():
+        for sequence_embs, deltaGH, activity in val_loader:
+            sequence_embs = sequence_embs.to(device)
+            deltaGH = deltaGH.to(device)
+            activity = activity.to(device)
+            
+            predictions = model(sequence_embs, deltaGH)
+            loss = criterion(predictions, activity.squeeze(-1))
+            
+            val_loss += loss.item()
+            val_num_batches += 1
+            
+            val_preds.append(predictions.cpu())
+            val_targets.append(activity.cpu())
+    
+    val_preds = torch.cat(val_preds).squeeze().numpy()
+    val_targets = torch.cat(val_targets).squeeze().numpy()
+    val_spearman, _ = spearmanr(val_targets, val_preds)
+    val_loss_avg = val_loss / val_num_batches
+    
+    # ---- Compute validation AUC ----
+    threshold_val = np.median(val_targets)
+    y_true_val = (val_targets >= threshold_val).astype(int)
+    y_score_val = val_preds
+    val_auc = roc_auc_score(y_true_val, y_score_val)
+    
+    print(f"         Validation loss={val_loss_avg:.4f}, "
+          f"Validation Spearman={val_spearman:.4f}, "
+          f"Validation AUC={val_auc:.4f}\n")
+    
+    val_losses.append(val_loss_avg)
+    val_spearmans.append(val_spearman)
+    # =========================================== #
 
-    # ---- Compute AUC ----
-    auc = roc_auc_score(y_true, y_score)
+    # ---- Plot ROC (only for final epoch) ----
+    if epoch == num_epochs - 1:
+        plt.figure(figsize=(8, 6))
+        
+        # Plot both Training and Validation ROC on same axes
+        fpr_train, tpr_train, _ = roc_curve(y_true, y_score)
+        fpr_val, tpr_val, _ = roc_curve(y_true_val, y_score_val)
+        
+        plt.plot(fpr_train, tpr_train, label=f'Training (AUC={train_auc:.4f})', linewidth=2)
+        plt.plot(fpr_val, tpr_val, label=f'Validation (AUC={val_auc:.4f})', linewidth=2, color='orange')
+        plt.plot([0,1],[0,1],'--', color='gray', label='Random Classifier')
+        
+        plt.xlabel("False Positive Rate", fontsize=12)
+        plt.ylabel("True Positive Rate", fontsize=12)
+        plt.title("ROC Curves - Training vs Validation", fontsize=14)
+        plt.legend(loc='lower right', fontsize=11)
+        plt.grid(alpha=0.3)
+        
+        plt.tight_layout()
 
-    print(f"AUC: {auc:.4f}")
+        plt.savefig(f'roc_curve_dropout{dropout}_batch{batch_size}_epochs{num_epochs}.png', dpi=300, bbox_inches='tight')
+        print(f"ROC curve saved as 'roc_curve_dropout{dropout}_batch{batch_size}_epochs{num_epochs}.png'")
 
-    # ---- Plot ----
-    plt.plot(fpr, tpr)
-    plt.plot([0,1],[0,1],'--')
-    plt.xlabel("False Positive Rate")
-    plt.ylabel("True Positive Rate")
-    plt.title(f"ROC Curve (AUC={auc:.4f})")
-    plt.show()
+        plt.show()
 
 print("Training complete")
 
