@@ -17,25 +17,33 @@ from sklearn.metrics import roc_curve, roc_auc_score
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
-train_data =torch.load("data/train_embeddings.pt")
+# =====================
+# Final values
+# =====================
+dropout = 0.01
+batch_size = 32
+num_epochs = 50
+# =====================
+
+train_data = torch.load("data/train_embeddings.pt")
 val_data = torch.load("data/val_embeddings.pt")
 int_test_data = torch.load("data/test_embeddings.pt")
 ext_test_data = torch.load("data/ext_test_embeddings.pt")
 
 class CrossSeqTransformer(nn.Module):
-    def __init__(self, vocab_size=6, d_model=128, nhead=8,          # WHY SHOULD VOCAB SIZE BE 6??
+    def __init__(self, vocab_size=6, d_model=128, nhead=8,
                   num_encoder_layers=3, num_decoder_layers=3,
-                  max_len=47, dropout=0.1, dg_embedding_dim=16):
+                  max_len=47, dropout=0.01, dg_embedding_dim=16):
          super().__init__()
          
          # Token embeddings
          self.token_embed = nn.Embedding(vocab_size, d_model)
-         self.pos_embed = nn.Embedding(max_len, d_model) # positional encoding
+         self.pos_embed = nn.Embedding(max_len, d_model) 
          
          # Transformer (encoder-decoder)
          self.transformer = nn.Transformer(
              d_model=d_model,
-             nhead=nhead, # multihead attention
+             nhead=nhead, 
              num_encoder_layers=num_encoder_layers,
              num_decoder_layers=num_decoder_layers,
              dim_feedforward=4*d_model,
@@ -176,33 +184,27 @@ def set_seed(seed=42):
     # Optional: makes dataloader workers deterministic
     os.environ['PYTHONHASHSEED'] = str(seed)
 
-## -------- Training Loop --------- ##
-set_seed(42)
-model = CrossSeqTransformer(dropout=dropout)
-criterion = nn.MSELoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+# -------------------
+# Training loop 
+# -------------------
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Prepare data
+
+# Training set
 train_seq_embs = train_data['sequence_embs']
 train_delta = train_data['deltaGH'].unsqueeze(-1) if train_data['deltaGH'].dim() == 1 else train_data['deltaGH']
 train_activity = train_data['activity'].unsqueeze(-1) if train_data['activity'].dim() == 1 else train_data['activity']
 train_activity = torch.log10(train_activity)
 
-# Normalizing
 train_deltaGH_min = train_data['deltaGH'].min()
 train_deltaGH_max = train_data['deltaGH'].max()
 train_deltaGH_norm = (train_delta - train_deltaGH_min) / (train_deltaGH_max - train_deltaGH_min)
 
-# Create dataset with NORMALIZED data
 train_dataset = TensorDataset(train_seq_embs, train_deltaGH_norm, train_activity)
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model = model.to(device)
-
-train_dataset = TensorDataset(train_seq_embs, train_deltaGH_norm, train_activity)
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-
+# Validation set
 val_seq_embs = val_data['sequence_embs']
 val_deltaGH = val_data['deltaGH'].unsqueeze(-1) if val_data['deltaGH'].dim() == 1 else val_data['deltaGH']
 val_deltaGH_norm = (val_deltaGH - train_deltaGH_min) / (train_deltaGH_max - train_deltaGH_min)
@@ -212,6 +214,7 @@ val_activity = np.log10(val_activity)
 val_dataset = TensorDataset(val_seq_embs, val_deltaGH_norm, val_activity)
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
+# Test sets
 int_test_seq_embs = int_test_data['sequence_embs']
 int_test_deltaGH = int_test_data['deltaGH'].unsqueeze(-1) if int_test_data['deltaGH'].dim() == 1 else int_test_data['deltaGH']
 int_test_deltaGH_norm = (int_test_deltaGH - train_deltaGH_min) / (train_deltaGH_max - train_deltaGH_min) # Normalizing
@@ -233,12 +236,25 @@ ext_test_loader = DataLoader(ext_test_dataset, batch_size=32, shuffle=False)
 all_preds = []
 all_targets = []
 
+# Initializing final model 
+
+set_seed(42)
+model = CrossSeqTransformer(dropout=dropout)
+criterion = nn.MSELoss()
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+train_losses, val_losses = [], []
+train_spear, val_spear = [], []
+model = model.to(device)
+
+# ======================
+# Final training loop
+# ======================
+print('Starting final training...')
 
 for epoch in range(num_epochs):
-    
+    model.train()  # initialize training of model
     current_lr = adjust_lr(optimizer, epoch, num_epochs)
     
-    model.train()  # initialize training of model
     epoch_loss = 0
     num_batches = 0
     
@@ -286,9 +302,11 @@ for epoch in range(num_epochs):
           f"Training AUC={train_auc:.4f}")
     
     train_losses.append(epoch_loss/num_batches)
-    train_spearmans.append(rho)
+    train_spear.append(rho)
     
-    # ========== VALIDATION EVALUATION ========== #
+    # -----------------------
+    # Validation evaluation
+    # -----------------------
     model.eval()  # Set to evaluation mode
     val_preds = []
     val_targets = []
@@ -326,7 +344,7 @@ for epoch in range(num_epochs):
           f"Validation AUC={val_auc:.4f}\n")
     
     val_losses.append(val_loss_avg)
-    val_spearmans.append(val_spearman)
+    val_spear.append(val_spearman)
     # =========================================== #
 
     # ---- Plot ROC (only for final epoch) ----
@@ -356,8 +374,9 @@ for epoch in range(num_epochs):
 
 print("Training complete")
 
-## ----- Model Evaluation on Internal and External Test Sets ----- ##
-
+# ---------------------------
+# Model Evaluation on Internal and External Test Sets
+# ---------------------------
 def evaluate_model(model, data_loader, device):
 
     model.eval()
@@ -415,3 +434,6 @@ def evaluate_model(model, data_loader, device):
 
 # plt.tight_layout()
 # plt.show()
+# roc_filename = f'roc_curve_dropout{dropout}_batch{batch_size}_epochs{num_epochs}.png'
+# plt.savefig(roc_filename, dpi=300, bbox_inches='tight')
+# print(f"Test set ROC curve saved as '{roc_filename}'")
