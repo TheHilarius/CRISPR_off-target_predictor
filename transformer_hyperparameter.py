@@ -565,12 +565,12 @@ if RUN_FINAL_TRAINING:
 
             plt.show()
 
-    print("Training of final model complete")
+    # ---- SAVE FINAL MODEL ----
+    save_path = "final_model.pt"
+    torch.save(model.state_dict(), save_path)
+    print(f"Model saved to {save_path}")
 
-# ---- SAVE FINAL MODEL ----
-save_path = "final_model.pt"
-torch.save(model.state_dict(), save_path)
-print(f"Model saved to {save_path}")
+    print("Training of final model complete")
 
 # ---------------------------
 # Model Evaluation on Internal and External Test Sets
