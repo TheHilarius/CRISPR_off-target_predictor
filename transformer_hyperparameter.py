@@ -177,7 +177,7 @@ def set_seed(seed=42):
 # Define hyperparameter grid
 hyperparameter_grid = {
     'num_epochs': [10, 25, 50, 75, 100], 
-    'dropout': [0.01, 0.05, 0.10, 0.20], 
+    'dropout': [0.00, 0.01, 0.05, 0.10, 0.20], 
     'batch_size': [32, 64]
 }
 
