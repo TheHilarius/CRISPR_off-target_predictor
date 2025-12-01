@@ -17,7 +17,7 @@ import os
 # ====================================================
 RUN_HYPERPARAMETER_SEARCH  = False    
 RUN_FINAL_TRAINING         = True 
-RUN_TEST_EVALUATION        = False     
+RUN_TEST_EVALUATION        = True     
 
 # Best hyperparameters FOUND AFTER tuning:
 BEST_DROPOUT     = 0.01
@@ -622,7 +622,7 @@ ext_test_activity = torch.log10(ext_test_activity)
 ext_test_dataset = TensorDataset(ext_test_seq_embs, ext_test_deltaGH_norm, ext_test_activity)
 ext_test_loader = DataLoader(ext_test_dataset, batch_size=BEST_BATCH_SIZE, shuffle=False)
 
-if RUN_TEST_EVALUATION and not RUN_FINAL_TRAINING:
+if RUN_TEST_EVALUATION and RUN_FINAL_TRAINING:
     model = CrossSeqTransformer(dropout=BEST_DROPOUT)
     model.load_state_dict(torch.load("final_model.pt"))
     model = model.to(device)
